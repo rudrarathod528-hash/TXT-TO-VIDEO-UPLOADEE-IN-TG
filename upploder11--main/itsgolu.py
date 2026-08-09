@@ -535,7 +535,7 @@ async def download_video(url, cmd, name):
 
 
 
-async def send_vid(bot: Client, m: Message, cc, filename, thumb, name, prog, channel_id, watermark="𝐈𝐓'𝐬𝐆𝐎𝐋𝐔", topic_thread_id: int = None):
+async def send_vid(bot: Client, m: Message, cc, filename, thumb, name, prog, channel_id, watermark="", topic_thread_id: int = None):
     try:
         if not filename or not os.path.isfile(filename):
             raise FileNotFoundError(f"Video file not found: {filename}")

@@ -208,7 +208,7 @@ def generate_html(file_name, videos, pdfs, others):
         <div class="other-list">{other_links}</div>
     </div>
 
-    <footer>Extracted By ⌯ FʀᴏɴᴛMᴀɴ | ×͜× |</footer>
+    <footer>TXT-TO-VIDEO Uploader</footer>
 
     <script src="https://vjs.zencdn.net/8.10.0/video.min.js"></script>
     <script>
@@ -286,7 +286,7 @@ async def html_handler(bot: Client, message: Message):
 
     await message.reply_document(
         document=html_file_path, 
-        caption=f"🌐 𝐇𝐓𝐌𝐋 𝐅𝐢𝐥𝐞 𝐂𝐫𝐞𝐚𝐭𝐞𝐝!\n<blockquote><b>`{b_name}`</b></blockquote>\n🌟 Extracted By : {CREDIT}"
+        caption=f"🌐 𝐇𝐓𝐌𝐋 𝐅𝐢𝐥𝐞 𝐂𝐫𝐞𝐚𝐭𝐞𝐝!\n<blockquote><b>`{b_name}`</b></blockquote>"
     )
     os.remove(file_path)
     os.remove(html_file_path)
