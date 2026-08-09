@@ -187,41 +187,66 @@ cptoken = os.getenv("CP_TOKEN", "")      # classplus API token — apna daalo (o
 
 @bot.on_message(filters.command("cookies") & filters.private)
 async def cookies_handler(client: Client, m: Message):
-    await m.reply_text(
-        "Please upload the cookies file (.txt format).",
+    status = await m.reply_text(
+        "🍪 Please upload the cookies file (.txt, Netscape format).",
         quote=True
     )
+    await cookies_upload_flow(client, m.chat.id, status)
 
+
+async def cookies_upload_flow(client: Client, chat_id: int, status_msg):
+    """Shared flow: wait for a Netscape-format cookies .txt file and save it.
+    Used by the /cookies command and the 'Upload Cookies' button."""
     try:
         # Wait for the user to send the cookies file
         try:
-            input_message: Message = await client.listen(m.chat.id, timeout=120)
+            input_message: Message = await client.listen(chat_id, timeout=120)
         except asyncio.TimeoutError:
-            await m.reply_text("\u23f3 Timeout! Please send the cookies file within 2 minutes.")
+            await status_msg.edit_text("⏳ Timeout! Please send the cookies file within 2 minutes.")
             return
 
         # Validate the uploaded file
-        if not input_message.document or not input_message.document.file_name.endswith(".txt"):
-            await m.reply_text("Invalid file type. Please upload a .txt file.")
+        if not input_message.document or not (input_message.document.file_name or "").endswith(".txt"):
+            await status_msg.edit_text("❌ Invalid file type. Please upload a **.txt** cookies file (Netscape format).")
+            try:
+                await input_message.delete(True)
+            except Exception:
+                pass
             return
 
         # Download the cookies file
         downloaded_path = await input_message.download()
 
         # Read the content of the uploaded file
-        with open(downloaded_path, "r") as uploaded_file:
+        with open(downloaded_path, "r", encoding="utf-8", errors="ignore") as uploaded_file:
             cookies_content = uploaded_file.read()
 
+        try:
+            os.remove(downloaded_path)
+        except Exception:
+            pass
+
         # Replace the content of the target cookies file
-        with open(cookies_file_path, "w") as target_file:
+        with open(cookies_file_path, "w", encoding="utf-8") as target_file:
             target_file.write(cookies_content)
 
-        await input_message.reply_text(
-            "✅ Cookies updated successfully.\n📂 Saved in `youtube_cookies.txt`."
+        await status_msg.edit_text(
+            "✅ Cookies updated successfully.\n"
+            f"📂 Saved in `{cookies_file_path}`.\n\n"
+            "Ye cookies YouTube + matching-domain downloads (classplus etc.) me use hongi."
         )
 
     except Exception as e:
-        await m.reply_text(f"⚠️ An error occurred: {str(e)}")
+        await status_msg.edit_text(f"⚠️ An error occurred: {str(e)}")
+
+
+@bot.on_callback_query(filters.regex("upload_cookies"))
+async def cookies_button_handler(client: Client, q: CallbackQuery):
+    await q.answer()
+    status = await q.message.reply_text(
+        "🍪 Please upload the cookies file (.txt, Netscape format)."
+    )
+    await cookies_upload_flow(client, q.message.chat.id, status)
 
 @bot.on_message(filters.command(["t2t"]))
 async def text_to_txt(client, message: Message):
@@ -274,7 +299,7 @@ async def getcookies_handler(client: Client, m: Message):
         await client.send_document(
             chat_id=m.chat.id,
             document=cookies_file_path,
-            caption="Here is the `youtube_cookies.txt` file."
+            caption=f"Here is the `{cookies_file_path}` file."
         )
     except Exception as e:
         await m.reply_text(f"⚠️ An error occurred: {str(e)}")
@@ -318,6 +343,9 @@ async def start(bot: Client, m: Message):
                     [
                         InlineKeyboardButton("ғᴇᴀᴛᴜʀᴇꜱ 🪔", callback_data="features"),
                         InlineKeyboardButton("ᴅᴇᴛᴀɪʟꜱ 🦋", callback_data="details")
+                    ],
+                    [
+                        InlineKeyboardButton("🍪 Upload Cookies", callback_data="upload_cookies")
                     ]
                 ])
             )
@@ -883,11 +911,17 @@ async def txt_handler(bot: Client, m: Message):
             else:
                 ytf = f"b[height<={raw_text2}]/bv[height<={raw_text2}]+ba/b/bv+ba"
            
+            # Netscape cookies (uploaded via 🍪 button / /cookies) are attached to
+            # every yt-dlp call; yt-dlp only sends cookies whose domain matches,
+            # so this is safe and also helps classplus CDN links when the user
+            # exports classplusapp.com cookies from their browser.
+            cookies_arg = f' --cookies "{cookies_file_path}"' if os.path.exists(cookies_file_path) else ""
+
             if "jw-prod" in url:
                 url = url.replace("https://apps-s3-jw-prod.utkarshapp.com/admin_v1/file_library/videos","https://d1q5ugnejk3zoi.cloudfront.net/ut-production-jw/admin_v1/file_library/videos")
-                cmd = f'yt-dlp -o "{name}.mp4" "{url}"'
+                cmd = f'yt-dlp{cookies_arg} -o "{name}.mp4" "{url}"'
             elif "webvideos.classplusapp." in url:
-               cmd = f'yt-dlp --add-header "referer:https://web.classplusapp.com/" --add-header "x-cdn-tag:empty" -f "{ytf}" "{url}" -o "{name}.mp4"'
+               cmd = f'yt-dlp{cookies_arg} --add-header "referer:https://web.classplusapp.com/" --add-header "x-cdn-tag:empty" -f "{ytf}" "{url}" -o "{name}.mp4"'
             elif any(x in url for x in ["media-cdn.classplusapp.com", "media-cdn-alisg.classplusapp.com", "media-cdn-a.classplusapp.com", "tencdn.classplusapp", "videos.classplusapp"]):
                # Still on the raw classplus CDN (JW/extract_keys resolution didn't
                # replace the URL) — send classplus referer + mobile UA, and the
@@ -895,13 +929,11 @@ async def txt_handler(bot: Client, m: Message):
                # enough for the CDN to serve the m3u8 without a signed link.
                cp_ua = "Mozilla/5.0 (Linux; Android 12; RMX2121) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/107.0.0.0 Mobile Safari/537.36"
                cp_token_hdr = f' --add-header "x-access-token:{cptoken}"' if cptoken else ""
-               cmd = f'yt-dlp --add-header "referer:https://classplusapp.com/" --user-agent "{cp_ua}"{cp_token_hdr} -f "{ytf}" "{url}" -o "{name}.mp4"'
-            elif ("youtube.com" in url or "youtu.be" in url) and os.path.exists("youtube_cookies.txt"):
-                cmd = f'yt-dlp --cookies youtube_cookies.txt -f "{ytf}" "{url}" -o "{name}".mp4'
+               cmd = f'yt-dlp{cookies_arg} --add-header "referer:https://classplusapp.com/" --user-agent "{cp_ua}"{cp_token_hdr} -f "{ytf}" "{url}" -o "{name}.mp4"'
             elif "youtube.com" in url or "youtu.be" in url:
-                cmd = f'yt-dlp -f "{ytf}" "{url}" -o "{name}".mp4'
+                cmd = f'yt-dlp{cookies_arg} -f "{ytf}" "{url}" -o "{name}".mp4'
             else:
-                cmd = f'yt-dlp -f "{ytf}" "{url}" -o "{name}.mp4"'
+                cmd = f'yt-dlp{cookies_arg} -f "{ytf}" "{url}" -o "{name}.mp4"'
 
             try:
                 credit_line = f"\n\n<b>🎓  Uᴘʟᴏᴀᴅ Bʏ : {CR}</b>" if CR else ""
@@ -1244,15 +1276,13 @@ async def text_handler(bot: Client, m: Message):
     name = name1
 
     # Download with yt-dlp
+    cookies_arg = f' --cookies "{cookies_file_path}"' if os.path.exists(cookies_file_path) else ""
     if "youtu" in link:
         ytf = f"bv*[height<={raw_text2}][ext=mp4]+ba[ext=m4a]/b[height<=?{raw_text2}]"
-        if os.path.exists("youtube_cookies.txt"):
-            cmd = f'yt-dlp --cookies youtube_cookies.txt -f "{ytf}" "{link}" -o "{name}.mp4"'
-        else:
-            cmd = f'yt-dlp -f "{ytf}" "{link}" -o "{name}.mp4"'
+        cmd = f'yt-dlp{cookies_arg} -f "{ytf}" "{link}" -o "{name}.mp4"'
     else:
         ytf = f"b[height<={raw_text2}]/bv[height<={raw_text2}]+ba/b/bv+ba"
-        cmd = f'yt-dlp -f "{ytf}" "{link}" -o "{name}.mp4"'
+        cmd = f'yt-dlp{cookies_arg} -f "{ytf}" "{link}" -o "{name}.mp4"'
 
     try:
         credit_line = f"\n\n<b>🎓  Uᴘʟᴏᴀᴅ Bʏ : {CREDIT}</b>" if CREDIT else ""
@@ -1298,6 +1328,7 @@ async def features_callback(client, callback_query: CallbackQuery):
         "• 📝 Text to file conversion\n"
         "• ⚙️ Customizable quality settings\n"
         "• 🎨 Custom watermark support\n"
+        "• 🍪 Cookies upload (Netscape .txt)\n"
     )
     await callback_query.message.edit_text(
         features_text,
@@ -1351,6 +1382,9 @@ async def back_to_start_callback(client, callback_query: CallbackQuery):
             [
                 InlineKeyboardButton("ғᴇᴀᴛᴜʀᴇꜱ 🪔", callback_data="features"),
                 InlineKeyboardButton("ᴅᴇᴛᴀɪʟꜱ 🦋", callback_data="details")
+            ],
+            [
+                InlineKeyboardButton("🍪 Upload Cookies", callback_data="upload_cookies")
             ]
         ])
     )
