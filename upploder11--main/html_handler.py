@@ -1,7 +1,7 @@
 import os
 import requests
 import subprocess
-from vars import CREDIT
+from vars import CREDIT, PW_TOKEN
 from pyrogram import Client, filters
 from pyrogram.types import Message
 
@@ -32,7 +32,7 @@ def categorize_urls(urls):
             videos.append((name, new_url))
 
         elif "d1d34p8vz63oiq.cloudfront.net/" in url:
-            new_url = f"https://anonymouspwplayer-0e5a3f512dec.herokuapp.com/pw?url={url}&token={your_working_token}"
+            new_url = f"https://anonymouspwplayer-0e5a3f512dec.herokuapp.com/pw?url={url}&token={PW_TOKEN}"
             videos.append((name, new_url))
                     
         elif "youtube.com/embed" in url:
@@ -260,7 +260,11 @@ def download_video(url, output_path):
 
 async def html_handler(bot: Client, message: Message):
     editable = await message.reply_text("𝐖𝐞𝐥𝐜𝐨𝐦𝐞! 𝐏𝐥𝐞𝐚𝐬𝐞 𝐮𝐩𝐥𝐨𝐚𝐝 𝐚 .𝐭𝐱𝐭 𝐟𝐢𝐥𝐞 𝐜𝐨𝐧𝐭𝐚𝐢𝐧𝐢𝐧𝐠 𝐔𝐑𝐋𝐬.✓")
-    input: Message = await bot.listen(editable.chat.id)
+    try:
+        input: Message = await bot.listen(editable.chat.id, timeout=120)
+    except asyncio.TimeoutError:
+        await message.reply_text("\u23f3 Timeout! Please send the .txt file within 2 minutes.")
+        return
     if input.document and input.document.file_name.endswith('.txt'):
         file_path = await input.download()
         file_name, ext = os.path.splitext(os.path.basename(file_path))

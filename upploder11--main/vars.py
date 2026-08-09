@@ -7,6 +7,8 @@ API_HASH = os.environ.get("API_HASH", "c1abd0630fcd54d33bc6528ec0955fff")
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8948315622:AAHCvt_LXgLRocbmG1TEFgcn9wQkiFDANvI")
 
 CREDIT = os.environ.get("CREDIT", "𝐈𝐓'𝐬𝐆𝐎𝐋𝐔")
+# PW Token for PhysicsWallah (PW) player URLs
+PW_TOKEN = os.environ.get("PW_TOKEN", "")
 # MongoDB Configuration
 DATABASE_NAME = os.environ.get("DATABASE_NAME", "CpprivateApi")
 DATABASE_URL = os.environ.get("DATABASE_URL", "mongodb+srv://itsgoluAPI:jrMHSipToKUEnmcp@cpprivateapi.ghhp3oz.mongodb.net/?appName=CpprivateApi")  # Add your own atlas db
