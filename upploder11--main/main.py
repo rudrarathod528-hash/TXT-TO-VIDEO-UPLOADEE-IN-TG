@@ -182,6 +182,7 @@ cookies_file_path = os.getenv("cookies_file_path", "youtube_cookies.txt")
 api_url = "http://master-api-v3.vercel.app/"
 api_token = os.getenv("API_TOKEN", "")   # utkarsh ws API token — apna daalo (optional)
 cwtoken = os.getenv("CW_TOKEN", "")      # brightcove bcov_auth token — apna daalo (optional)
+cptoken = os.getenv("CP_TOKEN", "")      # classplus API token — apna daalo (optional)
 
 
 @bot.on_message(filters.command("cookies") & filters.private)
