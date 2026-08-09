@@ -381,6 +381,18 @@ def safe_fail_reason(default="download produced no file", max_len=220):
     raw = " ".join(raw.split())
     return raw[-max_len:] if raw else default
 
+def fail_hint(link):
+    """Small actionable hint appended to download-failure messages."""
+    try:
+        link = link or ""
+        if ("classplusapp" in link or "testbook" in link) and not cptoken:
+            return "\n\n💡 Hint: set CP_TOKEN env var (classplus app token) and retry"
+        if ("pw.live" in link or "physicswallah" in link):
+            return "\n\n💡 Hint: send the PW token when the bot asks for it"
+    except Exception:
+        pass
+    return ""
+
 @bot.on_message(~auth_filter & filters.private & filters.command)
 async def unauthorized_handler(client, message: Message):
     await message.reply(
@@ -876,6 +888,14 @@ async def txt_handler(bot: Client, m: Message):
                 cmd = f'yt-dlp -o "{name}.mp4" "{url}"'
             elif "webvideos.classplusapp." in url:
                cmd = f'yt-dlp --add-header "referer:https://web.classplusapp.com/" --add-header "x-cdn-tag:empty" -f "{ytf}" "{url}" -o "{name}.mp4"'
+            elif any(x in url for x in ["media-cdn.classplusapp.com", "media-cdn-alisg.classplusapp.com", "media-cdn-a.classplusapp.com", "tencdn.classplusapp", "videos.classplusapp"]):
+               # Still on the raw classplus CDN (JW/extract_keys resolution didn't
+               # replace the URL) — send classplus referer + mobile UA, and the
+               # x-access-token too when CP_TOKEN is configured. This is often
+               # enough for the CDN to serve the m3u8 without a signed link.
+               cp_ua = "Mozilla/5.0 (Linux; Android 12; RMX2121) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/107.0.0.0 Mobile Safari/537.36"
+               cp_token_hdr = f' --add-header "x-access-token:{cptoken}"' if cptoken else ""
+               cmd = f'yt-dlp --add-header "referer:https://classplusapp.com/" --user-agent "{cp_ua}"{cp_token_hdr} -f "{ytf}" "{url}" -o "{name}.mp4"'
             elif ("youtube.com" in url or "youtu.be" in url) and os.path.exists("youtube_cookies.txt"):
                 cmd = f'yt-dlp --cookies youtube_cookies.txt -f "{ytf}" "{url}" -o "{name}".mp4'
             elif "youtube.com" in url or "youtu.be" in url:
@@ -1068,7 +1088,7 @@ async def txt_handler(bot: Client, m: Message):
                             await helper.send_vid(bot, m, cc, filename, thumb, name, prog, channel_id, watermark=watermark)
                             count += 1
                         else:
-                            await bot.send_message(channel_id, f'⚠️**Downloading Failed**⚠️\n**Name** =>> `{str(count).zfill(3)} {name1}`\n**Url** =>> {link0}\n\n<blockquote><i><b>Failed Reason: {safe_fail_reason()}</b></i></blockquote>', disable_web_page_preview=True)
+                            await bot.send_message(channel_id, f'⚠️**Downloading Failed**⚠️\n**Name** =>> `{str(count).zfill(3)} {name1}`\n**Url** =>> {link0}\n\n<blockquote><i><b>Failed Reason: {safe_fail_reason()}</b></i></blockquote>{fail_hint(link0)}', disable_web_page_preview=True)
                             failed_count += 1
                             count += 1
                             continue
@@ -1124,7 +1144,7 @@ async def txt_handler(bot: Client, m: Message):
                             await helper.send_vid(bot, m, cc, filename, thumb, name, prog, channel_id, watermark=watermark)
                             count += 1
                         else:
-                            await bot.send_message(channel_id, f'⚠️**Downloading Failed**⚠️\n**Name** =>> `{str(count).zfill(3)} {name1}`\n**Url** =>> {link0}\n\n<blockquote><i><b>Failed Reason: {safe_fail_reason()}</b></i></blockquote>', disable_web_page_preview=True)
+                            await bot.send_message(channel_id, f'⚠️**Downloading Failed**⚠️\n**Name** =>> `{str(count).zfill(3)} {name1}`\n**Url** =>> {link0}\n\n<blockquote><i><b>Failed Reason: {safe_fail_reason()}</b></i></blockquote>{fail_hint(link0)}', disable_web_page_preview=True)
                             failed_count += 1
                             count += 1
                         await asyncio.sleep(1)
