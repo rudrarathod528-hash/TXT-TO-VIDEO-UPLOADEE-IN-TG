@@ -207,7 +207,9 @@ async def download(url,name):
 async def pdf_download(url, file_name, chunk_size=1024 * 10):
     if os.path.exists(file_name):
         os.remove(file_name)
-    r = requests.get(url, allow_redirects=True, stream=True)
+    r = requests.get(url, allow_redirects=True, stream=True, timeout=60)
+    if r.status_code != 200:
+        raise FileNotFoundError(f"HTTP {r.status_code} while downloading {url[:100]}")
     with open(file_name, 'wb') as fd:
         for chunk in r.iter_content(chunk_size=chunk_size):
             if chunk:
@@ -278,7 +280,8 @@ async def decrypt_and_merge_video(mpd_url, keys_string, output_path, output_name
             except Exception:
                 pass
 
-        cmd1 = f'yt-dlp -f "bv[height<={quality}]+ba/b" -o "{output_path}/file.%(ext)s" --allow-unplayable-format --no-check-certificate "{mpd_url}"'
+        import shlex as _shlex
+        cmd1 = f'yt-dlp -f "bv[height<={quality}]+ba/b" -o "{output_path}/file.%(ext)s" -R 25 --fragment-retries 25 --allow-unplayable-format --no-check-certificate {_shlex.quote(mpd_url)}'
         print(f"Running command: {cmd1}")
         r1 = subprocess.run(cmd1, shell=True)
         if r1.returncode != 0:

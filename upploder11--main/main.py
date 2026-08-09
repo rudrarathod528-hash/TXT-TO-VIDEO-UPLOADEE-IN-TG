@@ -4,6 +4,7 @@ import re
 import sys
 import time
 import json
+import shlex
 import random
 import string
 import shutil
@@ -96,6 +97,21 @@ bot = Client(
 # Register command handlers
 register_clean_handler(bot)
 
+
+def auth_check_filter(_, client, message):
+    try:
+        # For channel messages
+        if message.chat.type == "channel":
+            return db.is_channel_authorized(message.chat.id, client.me.username)
+        # For private messages
+        else:
+            return db.is_user_authorized(message.from_user.id, client.me.username)
+    except Exception:
+        return False
+
+auth_filter = filters.create(auth_check_filter)
+
+
 @bot.on_message(filters.command("setlog") & filters.private)
 async def set_log_channel_cmd(client: Client, message: Message):
     """Set log channel for the bot"""
@@ -185,7 +201,7 @@ cwtoken = os.getenv("CW_TOKEN", "")      # brightcove bcov_auth token — apna d
 cptoken = os.getenv("CP_TOKEN", "")      # classplus API token — apna daalo (optional)
 
 
-@bot.on_message(filters.command("cookies") & filters.private)
+@bot.on_message(filters.command("cookies") & filters.private & auth_filter)
 async def cookies_handler(client: Client, m: Message):
     status = await m.reply_text(
         "🍪 Please upload the cookies file (.txt, Netscape format).",
@@ -248,7 +264,7 @@ async def cookies_button_handler(client: Client, q: CallbackQuery):
     )
     await cookies_upload_flow(client, q.message.chat.id, status)
 
-@bot.on_message(filters.command(["t2t"]))
+@bot.on_message(filters.command(["t2t"]) & auth_filter)
 async def text_to_txt(client, message: Message):
     user_id = str(message.from_user.id)
     # Inform the user to send the text data and its desired file name
@@ -292,7 +308,7 @@ async def text_to_txt(client, message: Message):
 UPLOAD_FOLDER = '/path/to/upload/folder'
 EDITED_FILE_PATH = '/path/to/save/edited_output.txt'
 
-@bot.on_message(filters.command("getcookies") & filters.private)
+@bot.on_message(filters.command("getcookies") & filters.private & auth_filter)
 async def getcookies_handler(client: Client, m: Message):
     try:
         # Send the cookies file to the user
@@ -304,7 +320,7 @@ async def getcookies_handler(client: Client, m: Message):
     except Exception as e:
         await m.reply_text(f"⚠️ An error occurred: {str(e)}")
 
-@bot.on_message(filters.command(["stop"]) )
+@bot.on_message(filters.command(["stop"]) & auth_filter)
 async def restart_handler(_, m):
     
     await m.reply_text("🚦**STOPPED**", True)
@@ -353,19 +369,6 @@ async def start(bot: Client, m: Message):
     except Exception as e:
         print(f"Error in start command: {str(e)}")
 
-
-def auth_check_filter(_, client, message):
-    try:
-        # For channel messages
-        if message.chat.type == "channel":
-            return db.is_channel_authorized(message.chat.id, client.me.username)
-        # For private messages
-        else:
-            return db.is_user_authorized(message.from_user.id, client.me.username)
-    except Exception:
-        return False
-
-auth_filter = filters.create(auth_check_filter)
 
 async def listen_text(client: Client, chat_id, timeout=None, default="/d", msg_filters=None):
     """Safely listen for a text reply with timeout + None-guard."""
@@ -437,7 +440,7 @@ async def id_command(client, message: Message):
 
 
 
-@bot.on_message(filters.command(["t2h"]))
+@bot.on_message(filters.command(["t2h"]) & auth_filter)
 async def call_html_handler(bot: Client, message: Message):
     await html_handler(bot, message)
     
@@ -653,7 +656,7 @@ async def txt_handler(bot: Client, m: Message):
     if raw_text3 == '/d':
         CR = f"{CREDIT}"
     elif "," in raw_text3:
-        CR, PRENAME = raw_text3.split(",")
+        CR, PRENAME = [p.strip() for p in raw_text3.split(",", 1)]
     else:
         CR = raw_text3
     chat_id = editable.chat.id
@@ -711,7 +714,15 @@ async def txt_handler(bot: Client, m: Message):
     if "/d" in raw_text7:
         channel_id = m.chat.id
     else:
-        channel_id = raw_text7    
+        try:
+            channel_id = int(raw_text7.strip())
+        except (ValueError, AttributeError):
+            # Invalid channel id would make every upload raise — fall back
+            channel_id = m.chat.id
+            try:
+                await m.reply_text("⚠️ Invalid channel ID — uploading to this chat instead.")
+            except Exception:
+                pass
     await editable.delete()
 
     try:
@@ -739,6 +750,11 @@ async def txt_handler(bot: Client, m: Message):
             link0 = "https://" + Vxy
 
             name1 = links[i][0].replace("(", "[").replace(")", "]").replace("_", "").replace("\t", "").replace(":", "").replace("/", "").replace("+", "").replace("#", "").replace("|", "").replace("@", "").replace("*", "").replace(".", "").replace("https", "").replace("http", "").strip()
+            # Security: name goes into shell commands — strip shell-dangerous
+            # chars ($(…), backticks, quotes, ; & | < >, backslash, control
+            # chars) from crafted txt files. Blacklist (not whitelist) so
+            # Hindi/other-script titles keep their matras intact.
+            name1 = re.sub(r"[$`\"\\;&|<>'\x00-\x1f]", "", name1).strip()
             if "," in raw_text3:
                  name = f'{PRENAME} {name1[:60]}'
             else:
@@ -759,7 +775,7 @@ async def txt_handler(bot: Client, m: Message):
                             raise ValueError("No m3u8 playlist found in visionias page")
             
             if "acecwply" in url:
-                cmd = f'yt-dlp -o "{name}.%(ext)s" -f "bestvideo[height<={raw_text2}]+bestaudio" --hls-prefer-ffmpeg --no-keep-video --remux-video mkv --no-warning "{url}"'
+                cmd = f'yt-dlp -o "{name}.%(ext)s" -f "bestvideo[height<={raw_text2}]+bestaudio" --hls-prefer-ffmpeg --no-keep-video --remux-video mkv --no-warning {shlex.quote(url)}'
 
             elif "https://static-trans-v1.classx.co.in" in url or "https://static-trans-v2.classx.co.in" in url:
                 base_with_params, signature = url.split("*")
@@ -916,12 +932,16 @@ async def txt_handler(bot: Client, m: Message):
             # so this is safe and also helps classplus CDN links when the user
             # exports classplusapp.com cookies from their browser.
             cookies_arg = f' --cookies "{cookies_file_path}"' if os.path.exists(cookies_file_path) else ""
+            # Shell-safe quoting — URLs from the txt file must not be able to
+            # inject commands ($(…), backticks, quotes, ;).
+            url_q = shlex.quote(url)
 
             if "jw-prod" in url:
                 url = url.replace("https://apps-s3-jw-prod.utkarshapp.com/admin_v1/file_library/videos","https://d1q5ugnejk3zoi.cloudfront.net/ut-production-jw/admin_v1/file_library/videos")
-                cmd = f'yt-dlp{cookies_arg} -o "{name}.mp4" "{url}"'
+                url_q = shlex.quote(url)
+                cmd = f'yt-dlp{cookies_arg} -o "{name}.mp4" {url_q}'
             elif "webvideos.classplusapp." in url:
-               cmd = f'yt-dlp{cookies_arg} --add-header "referer:https://web.classplusapp.com/" --add-header "x-cdn-tag:empty" -f "{ytf}" "{url}" -o "{name}.mp4"'
+               cmd = f'yt-dlp{cookies_arg} --add-header "referer:https://web.classplusapp.com/" --add-header "x-cdn-tag:empty" -f "{ytf}" {url_q} -o "{name}.mp4"'
             elif any(x in url for x in ["media-cdn.classplusapp.com", "media-cdn-alisg.classplusapp.com", "media-cdn-a.classplusapp.com", "tencdn.classplusapp", "videos.classplusapp"]):
                # Still on the raw classplus CDN (JW/extract_keys resolution didn't
                # replace the URL) — send classplus referer + mobile UA, and the
@@ -929,11 +949,11 @@ async def txt_handler(bot: Client, m: Message):
                # enough for the CDN to serve the m3u8 without a signed link.
                cp_ua = "Mozilla/5.0 (Linux; Android 12; RMX2121) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/107.0.0.0 Mobile Safari/537.36"
                cp_token_hdr = f' --add-header "x-access-token:{cptoken}"' if cptoken else ""
-               cmd = f'yt-dlp{cookies_arg} --add-header "referer:https://classplusapp.com/" --user-agent "{cp_ua}"{cp_token_hdr} -f "{ytf}" "{url}" -o "{name}.mp4"'
+               cmd = f'yt-dlp{cookies_arg} --add-header "referer:https://classplusapp.com/" --user-agent "{cp_ua}"{cp_token_hdr} -f "{ytf}" {url_q} -o "{name}.mp4"'
             elif "youtube.com" in url or "youtu.be" in url:
-                cmd = f'yt-dlp{cookies_arg} -f "{ytf}" "{url}" -o "{name}".mp4'
+                cmd = f'yt-dlp{cookies_arg} -f "{ytf}" {url_q} -o "{name}".mp4'
             else:
-                cmd = f'yt-dlp{cookies_arg} -f "{ytf}" "{url}" -o "{name}.mp4"'
+                cmd = f'yt-dlp{cookies_arg} -f "{ytf}" {url_q} -o "{name}.mp4"'
 
             try:
                 credit_line = f"\n\n<b>🎓  Uᴘʟᴏᴀᴅ Bʏ : {CR}</b>" if CR else ""
@@ -963,7 +983,7 @@ async def txt_handler(bot: Client, m: Message):
                 if "drive" in url:
                     try:
                         # Use yt-dlp for Google Drive links (reliable for big files)
-                        drive_cmd = f'yt-dlp -f "b" --no-playlist -o "{name}.%(ext)s" "{url}"'
+                        drive_cmd = f'yt-dlp -f "b" --no-playlist -o "{name}.%(ext)s" {shlex.quote(url)}'
                         subprocess.run(drive_cmd, shell=True)
                         found = None
                         for d_ext in (".mp4", ".mkv", ".webm", ".pdf", ".zip", ".txt", ".m4a", ".mp3"):
@@ -1026,7 +1046,7 @@ async def txt_handler(bot: Client, m: Message):
                             
                     else:
                         try:
-                            cmd = f'yt-dlp -o "{name}.pdf" "{url}"'
+                            cmd = f'yt-dlp -o "{name}.pdf" {shlex.quote(url)}'
                             download_cmd = f"{cmd} -R 25 --fragment-retries 25"
                             subprocess.run(download_cmd, shell=True)
                             if not (os.path.isfile(f'{name}.pdf') and os.path.getsize(f'{name}.pdf') > 0):
@@ -1065,8 +1085,11 @@ async def txt_handler(bot: Client, m: Message):
                             
                 elif any(ext in url for ext in [".jpg", ".jpeg", ".png"]):
                     try:
-                        ext = url.split('.')[-1]
-                        cmd = f'yt-dlp -o "{name}.{ext}" "{url}"'
+                        # ext from the path only — ".jpg?sig=x" must not become the extension
+                        ext = url.split('?')[0].split('#')[0].rsplit('.', 1)[-1].lower()
+                        if ext not in ("jpg", "jpeg", "png"):
+                            ext = "jpg"
+                        cmd = f'yt-dlp -o "{name}.{ext}" {shlex.quote(url)}'
                         download_cmd = f"{cmd} -R 25 --fragment-retries 25"
                         subprocess.run(download_cmd, shell=True)
                         if not (os.path.isfile(f'{name}.{ext}') and os.path.getsize(f'{name}.{ext}') > 0):
@@ -1086,8 +1109,10 @@ async def txt_handler(bot: Client, m: Message):
 
                 elif any(ext in url for ext in [".mp3", ".wav", ".m4a"]):
                     try:
-                        ext = url.split('.')[-1]
-                        cmd = f'yt-dlp -x --audio-format {ext} -o "{name}.{ext}" "{url}"'
+                        ext = url.split('?')[0].split('#')[0].rsplit('.', 1)[-1].lower()
+                        if ext not in ("mp3", "wav", "m4a"):
+                            ext = "mp3"
+                        cmd = f'yt-dlp -x --audio-format {ext} -o "{name}.{ext}" {shlex.quote(url)}'
                         download_cmd = f"{cmd} -R 25 --fragment-retries 25"
                         subprocess.run(download_cmd, shell=True)
                         if not (os.path.isfile(f'{name}.{ext}') and os.path.getsize(f'{name}.{ext}') > 0):
@@ -1277,12 +1302,13 @@ async def text_handler(bot: Client, m: Message):
 
     # Download with yt-dlp
     cookies_arg = f' --cookies "{cookies_file_path}"' if os.path.exists(cookies_file_path) else ""
+    link_q = shlex.quote(link)
     if "youtu" in link:
         ytf = f"bv*[height<={raw_text2}][ext=mp4]+ba[ext=m4a]/b[height<=?{raw_text2}]"
-        cmd = f'yt-dlp{cookies_arg} -f "{ytf}" "{link}" -o "{name}.mp4"'
+        cmd = f'yt-dlp{cookies_arg} -f "{ytf}" {link_q} -o "{name}.mp4"'
     else:
         ytf = f"b[height<={raw_text2}]/bv[height<={raw_text2}]+ba/b/bv+ba"
-        cmd = f'yt-dlp{cookies_arg} -f "{ytf}" "{link}" -o "{name}.mp4"'
+        cmd = f'yt-dlp{cookies_arg} -f "{ytf}" {link_q} -o "{name}.mp4"'
 
     try:
         credit_line = f"\n\n<b>🎓  Uᴘʟᴏᴀᴅ Bʏ : {CREDIT}</b>" if CREDIT else ""

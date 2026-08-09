@@ -3,7 +3,6 @@ pyrofork==2.2.11
 tgcrypto==1.2.5
 pyromod==1.5.0
 pysocks==1.7.1
-asyncio
 
 # HTTP & scraping
 requests==2.31.0
@@ -23,8 +22,8 @@ cryptography==42.0.5
 pyopenssl==24.1.0
 PyJWT==2.8.0
 
-# Video / Media
-yt-dlp==2025.06.30
+# Video / Media (keep unpinned — extractor/CDN fixes land in yt-dlp constantly)
+yt-dlp
 mutagen==1.46.0
 ffmpeg-python==0.2.0
 pillow==10.3.0
