@@ -4,6 +4,7 @@ import re
 import sys
 import time
 import json
+import shlex
 import random
 import string
 import shutil
@@ -96,6 +97,21 @@ bot = Client(
 # Register command handlers
 register_clean_handler(bot)
 
+
+def auth_check_filter(_, client, message):
+    try:
+        # For channel messages
+        if message.chat.type == "channel":
+            return db.is_channel_authorized(message.chat.id, client.me.username)
+        # For private messages
+        else:
+            return db.is_user_authorized(message.from_user.id, client.me.username)
+    except Exception:
+        return False
+
+auth_filter = filters.create(auth_check_filter)
+
+
 @bot.on_message(filters.command("setlog") & filters.private)
 async def set_log_channel_cmd(client: Client, message: Message):
     """Set log channel for the bot"""
@@ -185,45 +201,70 @@ cwtoken = os.getenv("CW_TOKEN", "")      # brightcove bcov_auth token — apna d
 cptoken = os.getenv("CP_TOKEN", "")      # classplus API token — apna daalo (optional)
 
 
-@bot.on_message(filters.command("cookies") & filters.private)
+@bot.on_message(filters.command("cookies") & filters.private & auth_filter)
 async def cookies_handler(client: Client, m: Message):
-    await m.reply_text(
-        "Please upload the cookies file (.txt format).",
+    status = await m.reply_text(
+        "🍪 Please upload the cookies file (.txt, Netscape format).",
         quote=True
     )
+    await cookies_upload_flow(client, m.chat.id, status)
 
+
+async def cookies_upload_flow(client: Client, chat_id: int, status_msg):
+    """Shared flow: wait for a Netscape-format cookies .txt file and save it.
+    Used by the /cookies command and the 'Upload Cookies' button."""
     try:
         # Wait for the user to send the cookies file
         try:
-            input_message: Message = await client.listen(m.chat.id, timeout=120)
+            input_message: Message = await client.listen(chat_id, timeout=120)
         except asyncio.TimeoutError:
-            await m.reply_text("\u23f3 Timeout! Please send the cookies file within 2 minutes.")
+            await status_msg.edit_text("⏳ Timeout! Please send the cookies file within 2 minutes.")
             return
 
         # Validate the uploaded file
-        if not input_message.document or not input_message.document.file_name.endswith(".txt"):
-            await m.reply_text("Invalid file type. Please upload a .txt file.")
+        if not input_message.document or not (input_message.document.file_name or "").endswith(".txt"):
+            await status_msg.edit_text("❌ Invalid file type. Please upload a **.txt** cookies file (Netscape format).")
+            try:
+                await input_message.delete(True)
+            except Exception:
+                pass
             return
 
         # Download the cookies file
         downloaded_path = await input_message.download()
 
         # Read the content of the uploaded file
-        with open(downloaded_path, "r") as uploaded_file:
+        with open(downloaded_path, "r", encoding="utf-8", errors="ignore") as uploaded_file:
             cookies_content = uploaded_file.read()
 
+        try:
+            os.remove(downloaded_path)
+        except Exception:
+            pass
+
         # Replace the content of the target cookies file
-        with open(cookies_file_path, "w") as target_file:
+        with open(cookies_file_path, "w", encoding="utf-8") as target_file:
             target_file.write(cookies_content)
 
-        await input_message.reply_text(
-            "✅ Cookies updated successfully.\n📂 Saved in `youtube_cookies.txt`."
+        await status_msg.edit_text(
+            "✅ Cookies updated successfully.\n"
+            f"📂 Saved in `{cookies_file_path}`.\n\n"
+            "Ye cookies YouTube + matching-domain downloads (classplus etc.) me use hongi."
         )
 
     except Exception as e:
-        await m.reply_text(f"⚠️ An error occurred: {str(e)}")
+        await status_msg.edit_text(f"⚠️ An error occurred: {str(e)}")
 
-@bot.on_message(filters.command(["t2t"]))
+
+@bot.on_callback_query(filters.regex("upload_cookies"))
+async def cookies_button_handler(client: Client, q: CallbackQuery):
+    await q.answer()
+    status = await q.message.reply_text(
+        "🍪 Please upload the cookies file (.txt, Netscape format)."
+    )
+    await cookies_upload_flow(client, q.message.chat.id, status)
+
+@bot.on_message(filters.command(["t2t"]) & auth_filter)
 async def text_to_txt(client, message: Message):
     user_id = str(message.from_user.id)
     # Inform the user to send the text data and its desired file name
@@ -267,19 +308,19 @@ async def text_to_txt(client, message: Message):
 UPLOAD_FOLDER = '/path/to/upload/folder'
 EDITED_FILE_PATH = '/path/to/save/edited_output.txt'
 
-@bot.on_message(filters.command("getcookies") & filters.private)
+@bot.on_message(filters.command("getcookies") & filters.private & auth_filter)
 async def getcookies_handler(client: Client, m: Message):
     try:
         # Send the cookies file to the user
         await client.send_document(
             chat_id=m.chat.id,
             document=cookies_file_path,
-            caption="Here is the `youtube_cookies.txt` file."
+            caption=f"Here is the `{cookies_file_path}` file."
         )
     except Exception as e:
         await m.reply_text(f"⚠️ An error occurred: {str(e)}")
 
-@bot.on_message(filters.command(["stop"]) )
+@bot.on_message(filters.command(["stop"]) & auth_filter)
 async def restart_handler(_, m):
     
     await m.reply_text("🚦**STOPPED**", True)
@@ -318,6 +359,9 @@ async def start(bot: Client, m: Message):
                     [
                         InlineKeyboardButton("ғᴇᴀᴛᴜʀᴇꜱ 🪔", callback_data="features"),
                         InlineKeyboardButton("ᴅᴇᴛᴀɪʟꜱ 🦋", callback_data="details")
+                    ],
+                    [
+                        InlineKeyboardButton("🍪 Upload Cookies", callback_data="upload_cookies")
                     ]
                 ])
             )
@@ -325,19 +369,6 @@ async def start(bot: Client, m: Message):
     except Exception as e:
         print(f"Error in start command: {str(e)}")
 
-
-def auth_check_filter(_, client, message):
-    try:
-        # For channel messages
-        if message.chat.type == "channel":
-            return db.is_channel_authorized(message.chat.id, client.me.username)
-        # For private messages
-        else:
-            return db.is_user_authorized(message.from_user.id, client.me.username)
-    except Exception:
-        return False
-
-auth_filter = filters.create(auth_check_filter)
 
 async def listen_text(client: Client, chat_id, timeout=None, default="/d", msg_filters=None):
     """Safely listen for a text reply with timeout + None-guard."""
@@ -369,6 +400,30 @@ def get_resolution(raw_text2):
         return raw_text2
     return "480"
 
+def safe_fail_reason(default="download produced no file", max_len=220):
+    """Return the last yt-dlp error (sanitized for Telegram markdown) so
+    failures show a real reason instead of a generic message."""
+    raw = getattr(helper, "LAST_DOWNLOAD_ERROR", "") or ""
+    raw = raw.strip()
+    if not raw:
+        return default
+    # keep only chars that are safe inside Telegram markdown entities
+    raw = re.sub(r"[^A-Za-z0-9 :;,./()\-]+", " ", raw)
+    raw = " ".join(raw.split())
+    return raw[-max_len:] if raw else default
+
+def fail_hint(link):
+    """Small actionable hint appended to download-failure messages."""
+    try:
+        link = link or ""
+        if ("classplusapp" in link or "testbook" in link) and not cptoken:
+            return "\n\n💡 Hint: set CP_TOKEN env var (classplus app token) and retry"
+        if ("pw.live" in link or "physicswallah" in link):
+            return "\n\n💡 Hint: send the PW token when the bot asks for it"
+    except Exception:
+        pass
+    return ""
+
 @bot.on_message(~auth_filter & filters.private & filters.command)
 async def unauthorized_handler(client, message: Message):
     await message.reply(
@@ -385,7 +440,7 @@ async def id_command(client, message: Message):
 
 
 
-@bot.on_message(filters.command(["t2h"]))
+@bot.on_message(filters.command(["t2h"]) & auth_filter)
 async def call_html_handler(bot: Client, message: Message):
     await html_handler(bot, message)
     
@@ -601,7 +656,7 @@ async def txt_handler(bot: Client, m: Message):
     if raw_text3 == '/d':
         CR = f"{CREDIT}"
     elif "," in raw_text3:
-        CR, PRENAME = raw_text3.split(",")
+        CR, PRENAME = [p.strip() for p in raw_text3.split(",", 1)]
     else:
         CR = raw_text3
     chat_id = editable.chat.id
@@ -659,7 +714,15 @@ async def txt_handler(bot: Client, m: Message):
     if "/d" in raw_text7:
         channel_id = m.chat.id
     else:
-        channel_id = raw_text7    
+        try:
+            channel_id = int(raw_text7.strip())
+        except (ValueError, AttributeError):
+            # Invalid channel id would make every upload raise — fall back
+            channel_id = m.chat.id
+            try:
+                await m.reply_text("⚠️ Invalid channel ID — uploading to this chat instead.")
+            except Exception:
+                pass
     await editable.delete()
 
     try:
@@ -687,6 +750,11 @@ async def txt_handler(bot: Client, m: Message):
             link0 = "https://" + Vxy
 
             name1 = links[i][0].replace("(", "[").replace(")", "]").replace("_", "").replace("\t", "").replace(":", "").replace("/", "").replace("+", "").replace("#", "").replace("|", "").replace("@", "").replace("*", "").replace(".", "").replace("https", "").replace("http", "").strip()
+            # Security: name goes into shell commands — strip shell-dangerous
+            # chars ($(…), backticks, quotes, ; & | < >, backslash, control
+            # chars) from crafted txt files. Blacklist (not whitelist) so
+            # Hindi/other-script titles keep their matras intact.
+            name1 = re.sub(r"[$`\"\\;&|<>'\x00-\x1f]", "", name1).strip()
             if "," in raw_text3:
                  name = f'{PRENAME} {name1[:60]}'
             else:
@@ -707,7 +775,7 @@ async def txt_handler(bot: Client, m: Message):
                             raise ValueError("No m3u8 playlist found in visionias page")
             
             if "acecwply" in url:
-                cmd = f'yt-dlp -o "{name}.%(ext)s" -f "bestvideo[height<={raw_text2}]+bestaudio" --hls-prefer-ffmpeg --no-keep-video --remux-video mkv --no-warning "{url}"'
+                cmd = f'yt-dlp -o "{name}.%(ext)s" -f "bestvideo[height<={raw_text2}]+bestaudio" --hls-prefer-ffmpeg --no-keep-video --remux-video mkv --no-warning {shlex.quote(url)}'
 
             elif "https://static-trans-v1.classx.co.in" in url or "https://static-trans-v2.classx.co.in" in url:
                 base_with_params, signature = url.split("*")
@@ -761,69 +829,79 @@ async def txt_handler(bot: Client, m: Message):
                 user_id = get_safe_user_id(m)
 
             elif any(x in url for x in ["https://cpvod.testbook.com/", "classplusapp.com/drm/", "media-cdn.classplusapp.com", "media-cdn-alisg.classplusapp.com", "media-cdn-a.classplusapp.com", "tencdn.classplusapp", "videos.classplusapp", "webvideos.classplusapp.com"]):
-                # normalize cpvod -> media-cdn path used by API
-                url_norm = url.replace("https://cpvod.testbook.com/", "https://media-cdn.classplusapp.com/drm/")
-                api_url_call = f"https://covercel.vercel.app/extract_keys?url={url}@bots_updatee&user_id={user_id}"
                 keys_string = ""
                 mpd = None
-                try:
-                    resp = requests.get(api_url_call, timeout=30)
-                    # parse JSON safely
-                    try:
-                        data = resp.json()
-                    except Exception:
-                        data = None
-            
-                    # DRM response (MPD + KEYS)
-                    if isinstance(data, dict) and "KEYS" in data and "MPD" in data:
-                        mpd = data.get("MPD")
-                        keys = data.get("KEYS", [])
-                        url = mpd
-                        keys_string = " ".join([f"--key {k}" for k in keys])
-            
-                    # Non-DRM response (direct url)
-                    elif isinstance(data, dict) and "url" in data:
-                        url = data.get("url")
-                        keys_string = ""
-            
+                resolved = False
+
+                is_drm_link = ("cpvod.testbook.com" in url) or ("classplusapp.com/drm/" in url)
+
+                # ---- 1) Non-DRM classplus CDN media (media-cdn / tencdn / videos / webvideos) ----
+                # Resolve through the JW signed-url API first — the plain CDN m3u8
+                # often rejects direct yt-dlp/aria2c requests, while the signed
+                # JW Player manifest downloads fine.
+                if not is_drm_link:
+                    if "tencdn.classplusapp" in url and raw_text4 and raw_text4 != "/d":
+                        jw_token = raw_text4
                     else:
-                        # Unexpected response format — fallback to helper
+                        jw_token = cptoken
+                    try:
+                        jw_headers = {'host': 'api.classplusapp.com', 'x-access-token': f'{jw_token}', 'accept-language': 'EN', 'api-version': '18', 'app-version': '1.4.73.2', 'build-number': '35', 'connection': 'Keep-Alive', 'content-type': 'application/json', 'device-details': 'Xiaomi_Redmi 7_SDK-32', 'device-id': 'c28d3cb16bbdac01', 'region': 'IN', 'user-agent': 'Mobile-Android', 'webengage-luid': '00000187-6fe4-5d41-a530-26186858be4c', 'accept-encoding': 'gzip'}
+                        jw_resp = requests.get('https://api.classplusapp.com/cams/uploader/video/jw-signed-url', headers=jw_headers, params={"url": url}, timeout=30)
+                        jw_data = jw_resp.json()
+                        if isinstance(jw_data, dict) and jw_data.get("url"):
+                            print(f"classplus jw-signed-url resolved: {str(jw_data['url'])[:150]}")
+                            url = jw_data["url"]
+                            resolved = True
+                        else:
+                            print(f"classplus jw-signed-url returned no url: {str(jw_data)[:200]}")
+                    except Exception as e:
+                        print(f"classplus jw-signed-url failed ({e}) — trying extract_keys API")
+
+                # ---- 2) DRM links (or JW resolution failed) -> extract_keys API ----
+                if not resolved:
+                    # normalize cpvod -> media-cdn path used by API
+                    url_norm = url.replace("https://cpvod.testbook.com/", "https://media-cdn.classplusapp.com/drm/")
+                    api_url_call = f"https://covercel.vercel.app/extract_keys?url={url}@bots_updatee&user_id={user_id}"
+                    try:
+                        resp = requests.get(api_url_call, timeout=30)
+                        # parse JSON safely
+                        try:
+                            data = resp.json()
+                        except Exception:
+                            data = None
+
+                        # DRM response (MPD + KEYS)
+                        if isinstance(data, dict) and "KEYS" in data and "MPD" in data:
+                            mpd = data.get("MPD")
+                            keys = data.get("KEYS", [])
+                            url = mpd
+                            keys_string = " ".join([f"--key {k}" for k in keys])
+
+                        # Non-DRM response (direct url)
+                        elif isinstance(data, dict) and data.get("url"):
+                            url = data.get("url")
+                            keys_string = ""
+
+                        else:
+                            # Unexpected response format — fallback to helper
+                            try:
+                                res = helper.get_mps_and_keys2(url_norm)
+                                if res:
+                                    mpd, keys = res
+                                    url = mpd
+                                    keys_string = " ".join([f"--key {k}" for k in keys])
+                            except Exception:
+                                pass
+                    except Exception:
+                        # API failed — attempt helper fallback
                         try:
                             res = helper.get_mps_and_keys2(url_norm)
                             if res:
                                 mpd, keys = res
                                 url = mpd
                                 keys_string = " ".join([f"--key {k}" for k in keys])
-                            else:
-                                keys_string = ""
                         except Exception:
-                            keys_string = ""
-                except Exception:
-                    # API failed — attempt helper fallback
-                    try:
-                        res = helper.get_mps_and_keys2(url_norm)
-                        if res:
-                            mpd, keys = res
-                            url = mpd
-                            keys_string = " ".join([f"--key {k}" for k in keys])
-                        else:
-                            keys_string = ""
-                    except Exception:
-                        keys_string = ""
-            elif "tencdn.classplusapp" in url:
-                headers = {'host': 'api.classplusapp.com', 'x-access-token': f'{raw_text4}', 'accept-language': 'EN', 'api-version': '18', 'app-version': '1.4.73.2', 'build-number': '35', 'connection': 'Keep-Alive', 'content-type': 'application/json', 'device-details': 'Xiaomi_Redmi 7_SDK-32', 'device-id': 'c28d3cb16bbdac01', 'region': 'IN', 'user-agent': 'Mobile-Android', 'webengage-luid': '00000187-6fe4-5d41-a530-26186858be4c', 'accept-encoding': 'gzip'}
-                params = {"url": f"{url}"}
-                response = requests.get('https://api.classplusapp.com/cams/uploader/video/jw-signed-url', headers=headers, params=params)
-                url = response.json()['url']  
-           
-            elif 'videos.classplusapp' in url:
-                url = requests.get(f'https://api.classplusapp.com/cams/uploader/video/jw-signed-url?url={url}', headers={'x-access-token': f'{cptoken}'}).json()['url']
-            
-            elif 'media-cdn.classplusapp.com' in url or 'media-cdn-alisg.classplusapp.com' in url or 'media-cdn-a.classplusapp.com' in url: 
-                headers = {'host': 'api.classplusapp.com', 'x-access-token': f'{cptoken}', 'accept-language': 'EN', 'api-version': '18', 'app-version': '1.4.73.2', 'build-number': '35', 'connection': 'Keep-Alive', 'content-type': 'application/json', 'device-details': 'Xiaomi_Redmi 7_SDK-32', 'device-id': 'c28d3cb16bbdac01', 'region': 'IN', 'user-agent': 'Mobile-Android', 'webengage-luid': '00000187-6fe4-5d41-a530-26186858be4c', 'accept-encoding': 'gzip'}
-                params = {"url": f"{url}"}
-                response = requests.get('https://api.classplusapp.com/cams/uploader/video/jw-signed-url', headers=headers, params=params)
-                url   = response.json()['url']
+                            pass
 
             elif "childId" in url and "parentId" in url:
                 url = f"https://anonymouspwplayer-0e5a3f512dec.herokuapp.com/pw?url={url}&token={raw_text4}"
@@ -849,17 +927,33 @@ async def txt_handler(bot: Client, m: Message):
             else:
                 ytf = f"b[height<={raw_text2}]/bv[height<={raw_text2}]+ba/b/bv+ba"
            
+            # Netscape cookies (uploaded via 🍪 button / /cookies) are attached to
+            # every yt-dlp call; yt-dlp only sends cookies whose domain matches,
+            # so this is safe and also helps classplus CDN links when the user
+            # exports classplusapp.com cookies from their browser.
+            cookies_arg = f' --cookies "{cookies_file_path}"' if os.path.exists(cookies_file_path) else ""
+            # Shell-safe quoting — URLs from the txt file must not be able to
+            # inject commands ($(…), backticks, quotes, ;).
+            url_q = shlex.quote(url)
+
             if "jw-prod" in url:
                 url = url.replace("https://apps-s3-jw-prod.utkarshapp.com/admin_v1/file_library/videos","https://d1q5ugnejk3zoi.cloudfront.net/ut-production-jw/admin_v1/file_library/videos")
-                cmd = f'yt-dlp -o "{name}.mp4" "{url}"'
+                url_q = shlex.quote(url)
+                cmd = f'yt-dlp{cookies_arg} -o "{name}.mp4" {url_q}'
             elif "webvideos.classplusapp." in url:
-               cmd = f'yt-dlp --add-header "referer:https://web.classplusapp.com/" --add-header "x-cdn-tag:empty" -f "{ytf}" "{url}" -o "{name}.mp4"'
-            elif ("youtube.com" in url or "youtu.be" in url) and os.path.exists("youtube_cookies.txt"):
-                cmd = f'yt-dlp --cookies youtube_cookies.txt -f "{ytf}" "{url}" -o "{name}".mp4'
+               cmd = f'yt-dlp{cookies_arg} --add-header "referer:https://web.classplusapp.com/" --add-header "x-cdn-tag:empty" -f "{ytf}" {url_q} -o "{name}.mp4"'
+            elif any(x in url for x in ["media-cdn.classplusapp.com", "media-cdn-alisg.classplusapp.com", "media-cdn-a.classplusapp.com", "tencdn.classplusapp", "videos.classplusapp"]):
+               # Still on the raw classplus CDN (JW/extract_keys resolution didn't
+               # replace the URL) — send classplus referer + mobile UA, and the
+               # x-access-token too when CP_TOKEN is configured. This is often
+               # enough for the CDN to serve the m3u8 without a signed link.
+               cp_ua = "Mozilla/5.0 (Linux; Android 12; RMX2121) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/107.0.0.0 Mobile Safari/537.36"
+               cp_token_hdr = f' --add-header "x-access-token:{cptoken}"' if cptoken else ""
+               cmd = f'yt-dlp{cookies_arg} --add-header "referer:https://classplusapp.com/" --user-agent "{cp_ua}"{cp_token_hdr} -f "{ytf}" {url_q} -o "{name}.mp4"'
             elif "youtube.com" in url or "youtu.be" in url:
-                cmd = f'yt-dlp -f "{ytf}" "{url}" -o "{name}".mp4'
+                cmd = f'yt-dlp{cookies_arg} -f "{ytf}" {url_q} -o "{name}".mp4'
             else:
-                cmd = f'yt-dlp -f "{ytf}" "{url}" -o "{name}.mp4"'
+                cmd = f'yt-dlp{cookies_arg} -f "{ytf}" {url_q} -o "{name}.mp4"'
 
             try:
                 credit_line = f"\n\n<b>🎓  Uᴘʟᴏᴀᴅ Bʏ : {CR}</b>" if CR else ""
@@ -889,7 +983,7 @@ async def txt_handler(bot: Client, m: Message):
                 if "drive" in url:
                     try:
                         # Use yt-dlp for Google Drive links (reliable for big files)
-                        drive_cmd = f'yt-dlp -f "b" --no-playlist -o "{name}.%(ext)s" "{url}"'
+                        drive_cmd = f'yt-dlp -f "b" --no-playlist -o "{name}.%(ext)s" {shlex.quote(url)}'
                         subprocess.run(drive_cmd, shell=True)
                         found = None
                         for d_ext in (".mp4", ".mkv", ".webm", ".pdf", ".zip", ".txt", ".m4a", ".mp3"):
@@ -952,7 +1046,7 @@ async def txt_handler(bot: Client, m: Message):
                             
                     else:
                         try:
-                            cmd = f'yt-dlp -o "{name}.pdf" "{url}"'
+                            cmd = f'yt-dlp -o "{name}.pdf" {shlex.quote(url)}'
                             download_cmd = f"{cmd} -R 25 --fragment-retries 25"
                             subprocess.run(download_cmd, shell=True)
                             if not (os.path.isfile(f'{name}.pdf') and os.path.getsize(f'{name}.pdf') > 0):
@@ -991,8 +1085,11 @@ async def txt_handler(bot: Client, m: Message):
                             
                 elif any(ext in url for ext in [".jpg", ".jpeg", ".png"]):
                     try:
-                        ext = url.split('.')[-1]
-                        cmd = f'yt-dlp -o "{name}.{ext}" "{url}"'
+                        # ext from the path only — ".jpg?sig=x" must not become the extension
+                        ext = url.split('?')[0].split('#')[0].rsplit('.', 1)[-1].lower()
+                        if ext not in ("jpg", "jpeg", "png"):
+                            ext = "jpg"
+                        cmd = f'yt-dlp -o "{name}.{ext}" {shlex.quote(url)}'
                         download_cmd = f"{cmd} -R 25 --fragment-retries 25"
                         subprocess.run(download_cmd, shell=True)
                         if not (os.path.isfile(f'{name}.{ext}') and os.path.getsize(f'{name}.{ext}') > 0):
@@ -1012,8 +1109,10 @@ async def txt_handler(bot: Client, m: Message):
 
                 elif any(ext in url for ext in [".mp3", ".wav", ".m4a"]):
                     try:
-                        ext = url.split('.')[-1]
-                        cmd = f'yt-dlp -x --audio-format {ext} -o "{name}.{ext}" "{url}"'
+                        ext = url.split('?')[0].split('#')[0].rsplit('.', 1)[-1].lower()
+                        if ext not in ("mp3", "wav", "m4a"):
+                            ext = "mp3"
+                        cmd = f'yt-dlp -x --audio-format {ext} -o "{name}.{ext}" {shlex.quote(url)}'
                         download_cmd = f"{cmd} -R 25 --fragment-retries 25"
                         subprocess.run(download_cmd, shell=True)
                         if not (os.path.isfile(f'{name}.{ext}') and os.path.getsize(f'{name}.{ext}') > 0):
@@ -1046,7 +1145,7 @@ async def txt_handler(bot: Client, m: Message):
                             await helper.send_vid(bot, m, cc, filename, thumb, name, prog, channel_id, watermark=watermark)
                             count += 1
                         else:
-                            await bot.send_message(channel_id, f'⚠️**Downloading Failed**⚠️\n**Name** =>> `{str(count).zfill(3)} {name1}`\n**Url** =>> {link0}\n\n<blockquote><i><b>Failed Reason: download produced no file</b></i></blockquote>', disable_web_page_preview=True)
+                            await bot.send_message(channel_id, f'⚠️**Downloading Failed**⚠️\n**Name** =>> `{str(count).zfill(3)} {name1}`\n**Url** =>> {link0}\n\n<blockquote><i><b>Failed Reason: {safe_fail_reason()}</b></i></blockquote>{fail_hint(link0)}', disable_web_page_preview=True)
                             failed_count += 1
                             count += 1
                             continue
@@ -1102,7 +1201,7 @@ async def txt_handler(bot: Client, m: Message):
                             await helper.send_vid(bot, m, cc, filename, thumb, name, prog, channel_id, watermark=watermark)
                             count += 1
                         else:
-                            await bot.send_message(channel_id, f'⚠️**Downloading Failed**⚠️\n**Name** =>> `{str(count).zfill(3)} {name1}`\n**Url** =>> {link0}\n\n<blockquote><i><b>Failed Reason: download produced no file</b></i></blockquote>', disable_web_page_preview=True)
+                            await bot.send_message(channel_id, f'⚠️**Downloading Failed**⚠️\n**Name** =>> `{str(count).zfill(3)} {name1}`\n**Url** =>> {link0}\n\n<blockquote><i><b>Failed Reason: {safe_fail_reason()}</b></i></blockquote>{fail_hint(link0)}', disable_web_page_preview=True)
                             failed_count += 1
                             count += 1
                         await asyncio.sleep(1)
@@ -1202,15 +1301,14 @@ async def text_handler(bot: Client, m: Message):
     name = name1
 
     # Download with yt-dlp
+    cookies_arg = f' --cookies "{cookies_file_path}"' if os.path.exists(cookies_file_path) else ""
+    link_q = shlex.quote(link)
     if "youtu" in link:
         ytf = f"bv*[height<={raw_text2}][ext=mp4]+ba[ext=m4a]/b[height<=?{raw_text2}]"
-        if os.path.exists("youtube_cookies.txt"):
-            cmd = f'yt-dlp --cookies youtube_cookies.txt -f "{ytf}" "{link}" -o "{name}.mp4"'
-        else:
-            cmd = f'yt-dlp -f "{ytf}" "{link}" -o "{name}.mp4"'
+        cmd = f'yt-dlp{cookies_arg} -f "{ytf}" {link_q} -o "{name}.mp4"'
     else:
         ytf = f"b[height<={raw_text2}]/bv[height<={raw_text2}]+ba/b/bv+ba"
-        cmd = f'yt-dlp -f "{ytf}" "{link}" -o "{name}.mp4"'
+        cmd = f'yt-dlp{cookies_arg} -f "{ytf}" {link_q} -o "{name}.mp4"'
 
     try:
         credit_line = f"\n\n<b>🎓  Uᴘʟᴏᴀᴅ Bʏ : {CREDIT}</b>" if CREDIT else ""
@@ -1256,6 +1354,7 @@ async def features_callback(client, callback_query: CallbackQuery):
         "• 📝 Text to file conversion\n"
         "• ⚙️ Customizable quality settings\n"
         "• 🎨 Custom watermark support\n"
+        "• 🍪 Cookies upload (Netscape .txt)\n"
     )
     await callback_query.message.edit_text(
         features_text,
@@ -1309,6 +1408,9 @@ async def back_to_start_callback(client, callback_query: CallbackQuery):
             [
                 InlineKeyboardButton("ғᴇᴀᴛᴜʀᴇꜱ 🪔", callback_data="features"),
                 InlineKeyboardButton("ᴅᴇᴛᴀɪʟꜱ 🦋", callback_data="details")
+            ],
+            [
+                InlineKeyboardButton("🍪 Upload Cookies", callback_data="upload_cookies")
             ]
         ])
     )

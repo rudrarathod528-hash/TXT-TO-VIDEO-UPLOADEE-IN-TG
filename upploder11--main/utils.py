@@ -66,7 +66,7 @@ async def progress_bar(current, total, reply, start):
         return
 
     base_speed = current / elapsed
-    speed = base_speed + (9 * 1024 * 1024)  # +9 MB/s
+    speed = base_speed  # actual measured speed (was inflated by +9 MB/s before)
 
     percent = (current / total) * 100
     eta_seconds = (total - current) / speed if speed > 0 else 0
