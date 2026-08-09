@@ -2,6 +2,7 @@ import os
 import re
 import time
 import mmap
+import shutil
 import datetime
 import aiohttp
 import aiofiles
@@ -473,25 +474,12 @@ async def fast_download(url, name):
     
     return None
 
-async def download_video(url, cmd, name):
-    retry_count = 0
-    max_retries = 2
+# Last yt-dlp error output (used to report a real failure reason in chat)
+LAST_DOWNLOAD_ERROR = ""
 
-    while retry_count < max_retries:
-        download_cmd = f'{cmd} -R 25 --fragment-retries 25 --external-downloader aria2c --downloader-args "aria2c: -x 16 -j 32"'
-        print(download_cmd)
-        logging.info(download_cmd)
 
-        k = subprocess.run(download_cmd, shell=True)
-
-        if k.returncode == 0:
-            break  # success
-
-        retry_count += 1
-        print(f"⚠️ Download failed (attempt {retry_count}/{max_retries}), retrying in 5s...")
-        await asyncio.sleep(5)
-
-    # Find the actual output file produced by yt-dlp
+def _find_downloaded_file(name):
+    """Locate the media file produced by yt-dlp for the given output name."""
     candidates = [
         name,
         f"{name}.mp4",
@@ -527,6 +515,102 @@ async def download_video(url, cmd, name):
                 return candidate
     except Exception as e:
         logging.error(f"Error scanning output files: {e}")
+
+    return None
+
+
+def _cleanup_download_artifacts(name):
+    """Remove partial/temp files left by a failed attempt so the next
+    downloader starts clean instead of resuming a corrupt partial file."""
+    try:
+        import glob
+        for f in glob.glob(f"{name}.*"):
+            if not os.path.isfile(f):
+                continue
+            base = os.path.basename(f)
+            is_temp = (base.endswith((".part", ".ytdl", ".aria2", ".temp", ".urls", ".tmp"))
+                       or ".frag" in base)
+            if is_temp or os.path.getsize(f) == 0:
+                try:
+                    os.remove(f)
+                except OSError:
+                    pass
+    except Exception:
+        pass
+
+
+async def download_video(url, cmd, name):
+    """Download a video with yt-dlp, trying multiple downloader backends.
+
+    Order of attempts:
+      1. aria2c external downloader (fast, only if installed)
+      2. yt-dlp native downloader  (works with AES-128 HLS, CDNs that
+         block aria2c connections, and hosts without aria2c installed)
+      3. ffmpeg downloader         (extra fallback for m3u8 streams)
+
+    Returns the path of the downloaded file, or None if every attempt failed.
+    """
+    global LAST_DOWNLOAD_ERROR
+    LAST_DOWNLOAD_ERROR = ""
+
+    # Clean leftover outputs from crashed previous runs with the same name
+    _cleanup_download_artifacts(name)
+
+    variants = []
+    if shutil.which("aria2c"):
+        variants.append((
+            "aria2c",
+            f'{cmd} -R 25 --fragment-retries 25 --external-downloader aria2c '
+            f'--downloader-args "aria2c: -x 16 -j 32 --disable-ipv6 --allow-overwrite=true"'
+        ))
+    variants.append(("native", f'{cmd} -R 25 --fragment-retries 25'))
+    if "m3u8" in url:
+        variants.append(("ffmpeg", f'{cmd} -R 25 --fragment-retries 25 --downloader ffmpeg'))
+
+    max_retries = 2
+
+    for downloader, download_cmd in variants:
+        for attempt in range(1, max_retries + 1):
+            print(f"[{downloader}] {download_cmd}")
+            logging.info(download_cmd)
+
+            try:
+                k = subprocess.run(
+                    download_cmd,
+                    shell=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                )
+                rc = k.returncode
+                err_out = (k.stderr or b"").decode(errors="ignore")
+            except Exception as e:
+                rc = 1
+                err_out = str(e)
+
+            if rc == 0:
+                break  # this downloader succeeded
+
+            LAST_DOWNLOAD_ERROR = err_out.strip()
+            print(
+                f"⚠️ [{downloader}] download failed "
+                f"(attempt {attempt}/{max_retries}): {LAST_DOWNLOAD_ERROR[-400:]}"
+            )
+
+            # A file may still have been produced despite the non-zero exit
+            found = _find_downloaded_file(name)
+            if found:
+                return found
+
+            await asyncio.sleep(5)
+
+        # Attempt(s) with this downloader finished — check for an output file
+        found = _find_downloaded_file(name)
+        if found:
+            return found
+
+        # No file — clean partial artifacts and try the next downloader backend
+        print(f"⚠️ [{downloader}] produced no file for '{name}', falling back to next downloader...")
+        _cleanup_download_artifacts(name)
 
     print(f"⚠️ Download finished but no output file found for: {name}")
     return None

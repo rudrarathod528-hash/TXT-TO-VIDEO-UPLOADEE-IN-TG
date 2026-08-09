@@ -369,6 +369,18 @@ def get_resolution(raw_text2):
         return raw_text2
     return "480"
 
+def safe_fail_reason(default="download produced no file", max_len=220):
+    """Return the last yt-dlp error (sanitized for Telegram markdown) so
+    failures show a real reason instead of a generic message."""
+    raw = getattr(helper, "LAST_DOWNLOAD_ERROR", "") or ""
+    raw = raw.strip()
+    if not raw:
+        return default
+    # keep only chars that are safe inside Telegram markdown entities
+    raw = re.sub(r"[^A-Za-z0-9 :;,./()\-]+", " ", raw)
+    raw = " ".join(raw.split())
+    return raw[-max_len:] if raw else default
+
 @bot.on_message(~auth_filter & filters.private & filters.command)
 async def unauthorized_handler(client, message: Message):
     await message.reply(
@@ -761,69 +773,79 @@ async def txt_handler(bot: Client, m: Message):
                 user_id = get_safe_user_id(m)
 
             elif any(x in url for x in ["https://cpvod.testbook.com/", "classplusapp.com/drm/", "media-cdn.classplusapp.com", "media-cdn-alisg.classplusapp.com", "media-cdn-a.classplusapp.com", "tencdn.classplusapp", "videos.classplusapp", "webvideos.classplusapp.com"]):
-                # normalize cpvod -> media-cdn path used by API
-                url_norm = url.replace("https://cpvod.testbook.com/", "https://media-cdn.classplusapp.com/drm/")
-                api_url_call = f"https://covercel.vercel.app/extract_keys?url={url}@bots_updatee&user_id={user_id}"
                 keys_string = ""
                 mpd = None
-                try:
-                    resp = requests.get(api_url_call, timeout=30)
-                    # parse JSON safely
-                    try:
-                        data = resp.json()
-                    except Exception:
-                        data = None
-            
-                    # DRM response (MPD + KEYS)
-                    if isinstance(data, dict) and "KEYS" in data and "MPD" in data:
-                        mpd = data.get("MPD")
-                        keys = data.get("KEYS", [])
-                        url = mpd
-                        keys_string = " ".join([f"--key {k}" for k in keys])
-            
-                    # Non-DRM response (direct url)
-                    elif isinstance(data, dict) and "url" in data:
-                        url = data.get("url")
-                        keys_string = ""
-            
+                resolved = False
+
+                is_drm_link = ("cpvod.testbook.com" in url) or ("classplusapp.com/drm/" in url)
+
+                # ---- 1) Non-DRM classplus CDN media (media-cdn / tencdn / videos / webvideos) ----
+                # Resolve through the JW signed-url API first — the plain CDN m3u8
+                # often rejects direct yt-dlp/aria2c requests, while the signed
+                # JW Player manifest downloads fine.
+                if not is_drm_link:
+                    if "tencdn.classplusapp" in url and raw_text4 and raw_text4 != "/d":
+                        jw_token = raw_text4
                     else:
-                        # Unexpected response format — fallback to helper
+                        jw_token = cptoken
+                    try:
+                        jw_headers = {'host': 'api.classplusapp.com', 'x-access-token': f'{jw_token}', 'accept-language': 'EN', 'api-version': '18', 'app-version': '1.4.73.2', 'build-number': '35', 'connection': 'Keep-Alive', 'content-type': 'application/json', 'device-details': 'Xiaomi_Redmi 7_SDK-32', 'device-id': 'c28d3cb16bbdac01', 'region': 'IN', 'user-agent': 'Mobile-Android', 'webengage-luid': '00000187-6fe4-5d41-a530-26186858be4c', 'accept-encoding': 'gzip'}
+                        jw_resp = requests.get('https://api.classplusapp.com/cams/uploader/video/jw-signed-url', headers=jw_headers, params={"url": url}, timeout=30)
+                        jw_data = jw_resp.json()
+                        if isinstance(jw_data, dict) and jw_data.get("url"):
+                            print(f"classplus jw-signed-url resolved: {str(jw_data['url'])[:150]}")
+                            url = jw_data["url"]
+                            resolved = True
+                        else:
+                            print(f"classplus jw-signed-url returned no url: {str(jw_data)[:200]}")
+                    except Exception as e:
+                        print(f"classplus jw-signed-url failed ({e}) — trying extract_keys API")
+
+                # ---- 2) DRM links (or JW resolution failed) -> extract_keys API ----
+                if not resolved:
+                    # normalize cpvod -> media-cdn path used by API
+                    url_norm = url.replace("https://cpvod.testbook.com/", "https://media-cdn.classplusapp.com/drm/")
+                    api_url_call = f"https://covercel.vercel.app/extract_keys?url={url}@bots_updatee&user_id={user_id}"
+                    try:
+                        resp = requests.get(api_url_call, timeout=30)
+                        # parse JSON safely
+                        try:
+                            data = resp.json()
+                        except Exception:
+                            data = None
+
+                        # DRM response (MPD + KEYS)
+                        if isinstance(data, dict) and "KEYS" in data and "MPD" in data:
+                            mpd = data.get("MPD")
+                            keys = data.get("KEYS", [])
+                            url = mpd
+                            keys_string = " ".join([f"--key {k}" for k in keys])
+
+                        # Non-DRM response (direct url)
+                        elif isinstance(data, dict) and data.get("url"):
+                            url = data.get("url")
+                            keys_string = ""
+
+                        else:
+                            # Unexpected response format — fallback to helper
+                            try:
+                                res = helper.get_mps_and_keys2(url_norm)
+                                if res:
+                                    mpd, keys = res
+                                    url = mpd
+                                    keys_string = " ".join([f"--key {k}" for k in keys])
+                            except Exception:
+                                pass
+                    except Exception:
+                        # API failed — attempt helper fallback
                         try:
                             res = helper.get_mps_and_keys2(url_norm)
                             if res:
                                 mpd, keys = res
                                 url = mpd
                                 keys_string = " ".join([f"--key {k}" for k in keys])
-                            else:
-                                keys_string = ""
                         except Exception:
-                            keys_string = ""
-                except Exception:
-                    # API failed — attempt helper fallback
-                    try:
-                        res = helper.get_mps_and_keys2(url_norm)
-                        if res:
-                            mpd, keys = res
-                            url = mpd
-                            keys_string = " ".join([f"--key {k}" for k in keys])
-                        else:
-                            keys_string = ""
-                    except Exception:
-                        keys_string = ""
-            elif "tencdn.classplusapp" in url:
-                headers = {'host': 'api.classplusapp.com', 'x-access-token': f'{raw_text4}', 'accept-language': 'EN', 'api-version': '18', 'app-version': '1.4.73.2', 'build-number': '35', 'connection': 'Keep-Alive', 'content-type': 'application/json', 'device-details': 'Xiaomi_Redmi 7_SDK-32', 'device-id': 'c28d3cb16bbdac01', 'region': 'IN', 'user-agent': 'Mobile-Android', 'webengage-luid': '00000187-6fe4-5d41-a530-26186858be4c', 'accept-encoding': 'gzip'}
-                params = {"url": f"{url}"}
-                response = requests.get('https://api.classplusapp.com/cams/uploader/video/jw-signed-url', headers=headers, params=params)
-                url = response.json()['url']  
-           
-            elif 'videos.classplusapp' in url:
-                url = requests.get(f'https://api.classplusapp.com/cams/uploader/video/jw-signed-url?url={url}', headers={'x-access-token': f'{cptoken}'}).json()['url']
-            
-            elif 'media-cdn.classplusapp.com' in url or 'media-cdn-alisg.classplusapp.com' in url or 'media-cdn-a.classplusapp.com' in url: 
-                headers = {'host': 'api.classplusapp.com', 'x-access-token': f'{cptoken}', 'accept-language': 'EN', 'api-version': '18', 'app-version': '1.4.73.2', 'build-number': '35', 'connection': 'Keep-Alive', 'content-type': 'application/json', 'device-details': 'Xiaomi_Redmi 7_SDK-32', 'device-id': 'c28d3cb16bbdac01', 'region': 'IN', 'user-agent': 'Mobile-Android', 'webengage-luid': '00000187-6fe4-5d41-a530-26186858be4c', 'accept-encoding': 'gzip'}
-                params = {"url": f"{url}"}
-                response = requests.get('https://api.classplusapp.com/cams/uploader/video/jw-signed-url', headers=headers, params=params)
-                url   = response.json()['url']
+                            pass
 
             elif "childId" in url and "parentId" in url:
                 url = f"https://anonymouspwplayer-0e5a3f512dec.herokuapp.com/pw?url={url}&token={raw_text4}"
@@ -1046,7 +1068,7 @@ async def txt_handler(bot: Client, m: Message):
                             await helper.send_vid(bot, m, cc, filename, thumb, name, prog, channel_id, watermark=watermark)
                             count += 1
                         else:
-                            await bot.send_message(channel_id, f'⚠️**Downloading Failed**⚠️\n**Name** =>> `{str(count).zfill(3)} {name1}`\n**Url** =>> {link0}\n\n<blockquote><i><b>Failed Reason: download produced no file</b></i></blockquote>', disable_web_page_preview=True)
+                            await bot.send_message(channel_id, f'⚠️**Downloading Failed**⚠️\n**Name** =>> `{str(count).zfill(3)} {name1}`\n**Url** =>> {link0}\n\n<blockquote><i><b>Failed Reason: {safe_fail_reason()}</b></i></blockquote>', disable_web_page_preview=True)
                             failed_count += 1
                             count += 1
                             continue
@@ -1102,7 +1124,7 @@ async def txt_handler(bot: Client, m: Message):
                             await helper.send_vid(bot, m, cc, filename, thumb, name, prog, channel_id, watermark=watermark)
                             count += 1
                         else:
-                            await bot.send_message(channel_id, f'⚠️**Downloading Failed**⚠️\n**Name** =>> `{str(count).zfill(3)} {name1}`\n**Url** =>> {link0}\n\n<blockquote><i><b>Failed Reason: download produced no file</b></i></blockquote>', disable_web_page_preview=True)
+                            await bot.send_message(channel_id, f'⚠️**Downloading Failed**⚠️\n**Name** =>> `{str(count).zfill(3)} {name1}`\n**Url** =>> {link0}\n\n<blockquote><i><b>Failed Reason: {safe_fail_reason()}</b></i></blockquote>', disable_web_page_preview=True)
                             failed_count += 1
                             count += 1
                         await asyncio.sleep(1)
