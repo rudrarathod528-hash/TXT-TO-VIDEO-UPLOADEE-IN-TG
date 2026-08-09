@@ -29,13 +29,20 @@ from db import Database
 
 
 def get_duration(filename):
-    result = subprocess.run(
-        ["ffprobe", "-v", "error", "-show_entries",
-         "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", filename],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT
-    )
-    return float(result.stdout)
+    try:
+        if not os.path.isfile(filename):
+            return 0.0
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries",
+             "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", filename],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=30
+        )
+        out = result.stdout.decode().strip()
+        return float(out) if out else 0.0
+    except Exception:
+        return 0.0
 
 def split_large_video(file_path, max_size_mb=1900):
     size_bytes = os.path.getsize(file_path)
@@ -45,6 +52,10 @@ def split_large_video(file_path, max_size_mb=1900):
         return [file_path]  # No splitting needed
 
     duration = get_duration(file_path)
+    if duration <= 0:
+        # Can't determine duration — cannot split safely, return as is
+        return [file_path]
+
     parts = ceil(size_bytes / max_bytes)
     part_duration = duration / parts
     base_name = file_path.rsplit(".", 1)[0]
@@ -61,19 +72,29 @@ def split_large_video(file_path, max_size_mb=1900):
             output_file
         ]
         subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        if os.path.exists(output_file):
+        if os.path.exists(output_file) and os.path.getsize(output_file) > 0:
             output_files.append(output_file)
+
+    if not output_files:
+        return [file_path]
 
     return output_files
 
 
 def duration(filename):
-    result = subprocess.run(["ffprobe", "-v", "error", "-show_entries",
+    try:
+        if not os.path.isfile(filename):
+            return 0.0
+        result = subprocess.run(["ffprobe", "-v", "error", "-show_entries",
                              "format=duration", "-of",
                              "default=noprint_wrappers=1:nokey=1", filename],
         stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT)
-    return float(result.stdout)
+        stderr=subprocess.DEVNULL,
+        timeout=30)
+        out = result.stdout.decode().strip()
+        return float(out) if out else 0.0
+    except Exception:
+        return 0.0
 
 
 def get_mps_and_keys(api_url):
@@ -82,6 +103,72 @@ def get_mps_and_keys(api_url):
     mpd = response_json.get('mpd_url')
     keys = response_json.get('keys')
     return mpd, keys
+
+
+def get_mps_and_keys2(url, user_id=0):
+    """Fetch MPD + decryption keys for a classplus DRM media URL.
+
+    Returns (mpd_url, keys_list) or None on failure.
+    """
+    try:
+        if not url:
+            return None
+
+        api_url_call = f"https://covercel.vercel.app/extract_keys?url={url}@bots_updatee&user_id={user_id}"
+        resp = requests.get(api_url_call, timeout=30)
+        data = resp.json()
+
+        # DRM response (MPD + KEYS)
+        if isinstance(data, dict) and "MPD" in data and "KEYS" in data:
+            return data.get("MPD"), data.get("KEYS", [])
+
+        # Alternate response formats
+        if isinstance(data, dict) and "mpd_url" in data and "keys" in data:
+            return data.get("mpd_url"), data.get("keys", [])
+        if isinstance(data, dict) and "mpd" in data and "keys" in data:
+            return data.get("mpd"), data.get("keys", [])
+
+        # Non-DRM response (direct url)
+        if isinstance(data, dict) and "url" in data:
+            return data.get("url"), []
+
+        print(f"get_mps_and_keys2: unexpected response: {str(data)[:200]}")
+    except Exception as e:
+        print(f"get_mps_and_keys2 error: {str(e)}")
+
+    return None
+
+
+def decrypt_file(file_path, key):
+    """Decrypt Appx encrypted video files (XOR first 28 bytes with key)."""
+    if not key or not os.path.exists(file_path):
+        return False
+    try:
+        with open(file_path, "r+b") as f:
+            num_bytes = min(28, os.path.getsize(file_path))
+            with mmap.mmap(f.fileno(), length=num_bytes, access=mmap.ACCESS_WRITE) as mmapped_file:
+                for i in range(num_bytes):
+                    mmapped_file[i] ^= ord(key[i]) if i < len(key) else i
+        return True
+    except Exception as e:
+        print(f"Error decrypting {file_path}: {str(e)}")
+        return False
+
+
+async def download_and_decrypt_video(url, cmd, name, key):
+    """Download an Appx encrypted video and decrypt it in place."""
+    video_path = await download_video(url, cmd, name)
+
+    if not video_path:
+        print("download_and_decrypt_video: download produced no file")
+        return None
+
+    if decrypt_file(video_path, key):
+        print(f"File {video_path} decrypted successfully.")
+        return video_path
+
+    print(f"Failed to decrypt {video_path}.")
+    return None
 
 
    
@@ -180,51 +267,85 @@ async def decrypt_and_merge_video(mpd_url, keys_string, output_path, output_name
         output_path = Path(output_path)
         output_path.mkdir(parents=True, exist_ok=True)
 
-        cmd1 = f'yt-dlp -f "bv[height<={quality}]+ba/b" -o "{output_path}/file.%(ext)s" --allow-unplayable-format --no-check-certificate --external-downloader aria2c "{mpd_url}"'
+        if not mpd_url:
+            raise ValueError("MPD URL is empty — cannot download.")
+
+        # Clean leftover files from previous runs
+        for old in output_path.glob("file.*"):
+            try:
+                old.unlink()
+            except Exception:
+                pass
+
+        cmd1 = f'yt-dlp -f "bv[height<={quality}]+ba/b" -o "{output_path}/file.%(ext)s" --allow-unplayable-format --no-check-certificate "{mpd_url}"'
         print(f"Running command: {cmd1}")
-        os.system(cmd1)
-        
-        avDir = list(output_path.iterdir())
-        print(f"Downloaded files: {avDir}")
+        r1 = subprocess.run(cmd1, shell=True)
+        if r1.returncode != 0:
+            raise RuntimeError(f"yt-dlp failed to download MPD (exit code {r1.returncode})")
+
+        avDir = [p for p in output_path.iterdir()
+                 if p.is_file() and p.suffix in (".mp4", ".m4a", ".mkv", ".webm")
+                 and p.name.startswith("file")]
+        print(f"Downloaded files: {[p.name for p in avDir]}")
         print("Decrypting")
 
-        video_decrypted = False
-        audio_decrypted = False
+        if not avDir:
+            raise FileNotFoundError("No media files found after MPD download.")
 
+        video_file = None
+        audio_file = None
         for data in avDir:
-            if data.suffix == ".mp4" and not video_decrypted:
-                cmd2 = f'mp4decrypt {keys_string} --show-progress "{data}" "{output_path}/video.mp4"'
+            if data.suffix == ".m4a" and audio_file is None:
+                audio_file = data
+            elif video_file is None:
+                video_file = data
+
+        dec_video = output_path / "video_dec.mp4"
+        dec_audio = output_path / "audio_dec.m4a"
+
+        has_keys = bool(keys_string and keys_string.strip() and keys_string.strip() != "--key")
+
+        # Decrypt files with mp4decrypt when keys are available
+        if has_keys:
+            if video_file is not None:
+                cmd2 = f'mp4decrypt {keys_string} --show-progress "{video_file}" "{dec_video}"'
                 print(f"Running command: {cmd2}")
-                os.system(cmd2)
-                if (output_path / "video.mp4").exists():
-                    video_decrypted = True
-                data.unlink()
-            elif data.suffix == ".m4a" and not audio_decrypted:
-                cmd3 = f'mp4decrypt {keys_string} --show-progress "{data}" "{output_path}/audio.m4a"'
+                subprocess.run(cmd2, shell=True)
+            if audio_file is not None:
+                cmd3 = f'mp4decrypt {keys_string} --show-progress "{audio_file}" "{dec_audio}"'
                 print(f"Running command: {cmd3}")
-                os.system(cmd3)
-                if (output_path / "audio.m4a").exists():
-                    audio_decrypted = True
-                data.unlink()
+                subprocess.run(cmd3, shell=True)
 
-        if not video_decrypted or not audio_decrypted:
-            raise FileNotFoundError("Decryption failed: video or audio file not found.")
+            use_video = dec_video if dec_video.exists() else video_file
+            use_audio = dec_audio if dec_audio.exists() else audio_file
+        else:
+            use_video = video_file
+            use_audio = audio_file
 
-        cmd4 = f'ffmpeg -i "{output_path}/video.mp4" -i "{output_path}/audio.m4a" -c copy "{output_path}/{output_name}.mp4"'
-        print(f"Running command: {cmd4}")
-        os.system(cmd4)
-        if (output_path / "video.mp4").exists():
-            (output_path / "video.mp4").unlink()
-        if (output_path / "audio.m4a").exists():
-            (output_path / "audio.m4a").unlink()
-        
+        if use_video is None or not use_video.exists():
+            raise FileNotFoundError("Decryption failed: no playable video file found.")
+
         filename = output_path / f"{output_name}.mp4"
 
-        if not filename.exists():
+        if use_audio is not None and use_audio.exists() and use_audio != use_video:
+            cmd4 = f'ffmpeg -y -i "{use_video}" -i "{use_audio}" -c copy "{filename}"'
+        else:
+            cmd4 = f'ffmpeg -y -i "{use_video}" -c copy "{filename}"'
+        print(f"Running command: {cmd4}")
+        subprocess.run(cmd4, shell=True)
+
+        if not filename.exists() or os.path.getsize(filename) == 0:
             raise FileNotFoundError("Merged video file not found.")
 
-        cmd5 = f'ffmpeg -i "{filename}" 2>&1 | grep "Duration"'
-        duration_info = os.popen(cmd5).read()
+        # Cleanup temp files (only files we created in this step)
+        for p in list(output_path.iterdir()):
+            if p.is_file() and p.name.startswith(("file.", "video_dec", "audio_dec")):
+                try:
+                    p.unlink()
+                except Exception:
+                    pass
+
+        duration_info = get_duration(str(filename))
         print(f"Duration info: {duration_info}")
 
         return str(filename)
@@ -357,8 +478,6 @@ async def download_video(url, cmd, name):
     max_retries = 2
 
     while retry_count < max_retries:
-
-
         download_cmd = f'{cmd} -R 25 --fragment-retries 25 --external-downloader aria2c --downloader-args "aria2c: -x 16 -j 32"'
         print(download_cmd)
         logging.info(download_cmd)
@@ -372,39 +491,67 @@ async def download_video(url, cmd, name):
         print(f"⚠️ Download failed (attempt {retry_count}/{max_retries}), retrying in 5s...")
         await asyncio.sleep(5)
 
+    # Find the actual output file produced by yt-dlp
+    candidates = [
+        name,
+        f"{name}.mp4",
+        f"{name}.webm",
+        f"{name}.mkv",
+        f"{name}.m4v",
+        f"{name}.mov",
+        f"{name}.flv",
+        f"{name}.avi",
+        f"{name}.mp4.webm",
+        f"{name}.mp4.mp4",
+        f"{name}.mkv.webm",
+    ]
+    for candidate in candidates:
+        if candidate and os.path.isfile(candidate) and os.path.getsize(candidate) > 0:
+            return candidate
+
+    # Fallback: glob anything matching the name, skipping temp/fragment files
     try:
-        if os.path.isfile(name):
-            return name
-        elif os.path.isfile(f"{name}.webm"):
-            return f"{name}.webm"
-        name = name.split(".")[0]
-        if os.path.isfile(f"{name}.mkv"):
-            return f"{name}.mkv"
-        elif os.path.isfile(f"{name}.mp4"):
-            return f"{name}.mp4"
-        elif os.path.isfile(f"{name}.mp4.webm"):
-            return f"{name}.mp4.webm"
+        import glob
+        for candidate in sorted(glob.glob(f"{name}.*")):
+            if not os.path.isfile(candidate):
+                continue
+            base = os.path.basename(candidate)
+            # Skip temp/fragment files (".part", ".ytdl", ".aria2", ".frag.urls",
+            # and yt-dlp fragment files like "name.mp4.f137.mp4" / "name.mp4.m4a")
+            if (".part" in base or ".frag" in base or ".ytdl" in base
+                    or ".aria2" in base or base.endswith(".urls")):
+                continue
+            if ".f" in base and base.rsplit(".", 1)[-1] in ("mp4", "webm", "m4a", "mkv"):
+                continue
+            if os.path.getsize(candidate) > 0:
+                return candidate
+    except Exception as e:
+        logging.error(f"Error scanning output files: {e}")
 
-        return name + ".mp4"
-    except Exception as exc:
-        logging.error(f"Error checking file: {exc}")
-        return name 
+    print(f"⚠️ Download finished but no output file found for: {name}")
+    return None
 
 
 
 
 
-async def send_vid(bot: Client, m: Message, cc, filename, thumb, name, prog, channel_id, watermark="𝐈𝐓'𝐬𝐆𝐎𝐋𝐔", topic_thread_id: int = None):
+async def send_vid(bot: Client, m: Message, cc, filename, thumb, name, prog, channel_id, watermark="", topic_thread_id: int = None):
     try:
+        if not filename or not os.path.isfile(filename):
+            raise FileNotFoundError(f"Video file not found: {filename}")
+        if os.path.getsize(filename) == 0:
+            raise ValueError(f"Video file is empty: {filename}")
+
         temp_thumb = None  # ✅ Ensure this is always defined for later cleanup
 
         thumbnail = thumb
         if thumb in ["/d", "no"] or not os.path.exists(thumb):
             temp_thumb = f"downloads/thumb_{os.path.basename(filename)}.jpg"
-            
+            os.makedirs("downloads", exist_ok=True)
+
             # Generate thumbnail at 10s
             subprocess.run(
-                f'ffmpeg -i "{filename}" -ss 00:00:10 -vframes 1 -q:v 2 -y "{temp_thumb}"',
+                f'ffmpeg -y -i "{filename}" -ss 00:00:10 -vframes 1 -q:v 2 "{temp_thumb}"',
                 shell=True
             )
 
@@ -437,21 +584,32 @@ async def send_vid(bot: Client, m: Message, cc, filename, thumb, name, prog, cha
 
                 box_h = max(60, int(font_size * 1.6))
 
-                # Simple escaping for single quotes in text
-                safe_text = text_to_draw.replace("'", "\\'")
+                # Write watermark text to a file to avoid shell-escaping issues
+                txt_path = f"{temp_thumb}.txt"
+                with open(txt_path, "w", encoding="utf-8") as f:
+                    f.write(text_to_draw)
+
+                font_path = "font.otf" if os.path.exists("font.otf") else ""
+                font_arg = f"fontfile={font_path}:" if font_path else ""
 
                 text_cmd = (
-                    f'ffmpeg -i "{temp_thumb}" -vf '
+                    f'ffmpeg -y -i "{temp_thumb}" -vf '
                     f'"drawbox=y=0:color=black@0.35:width=iw:height={box_h}:t=fill,'
-                    f'drawtext=fontfile=font.ttf:text=\'{safe_text}\':fontcolor=white:'
+                    f'drawtext={font_arg}textfile={txt_path}:fontcolor=white:'
                     f'fontsize={font_size}:x=(w-text_w)/2:y=(({box_h})-text_h)/2" '
                     f'-c:v mjpeg -q:v 2 -y "{temp_thumb}"'
                 )
                 subprocess.run(text_cmd, shell=True)
-            
+                if os.path.exists(txt_path):
+                    os.remove(txt_path)
+
             thumbnail = temp_thumb if os.path.exists(temp_thumb) else None
 
-        await prog.delete(True)  # ⏳ Remove previous progress message
+        if prog is not None:
+            try:
+                await prog.delete(True)  # ⏳ Remove previous progress message
+            except Exception:
+                pass
 
         reply1 = await bot.send_message(channel_id, f" **Uploading Video:**\n<blockquote>{name}</blockquote>")
         reply = await m.reply_text(f"🖼 **Generating Thumbnail:**\n<blockquote>{name}</blockquote>")
@@ -471,14 +629,13 @@ async def send_vid(bot: Client, m: Message, cc, filename, thumb, name, prog, cha
                     video=filename,
                     caption=cc,
                     supports_streaming=True,
-                    height=720,
-                    width=1280,
                     thumb=thumbnail,
                     duration=dur,
                     progress=progress_bar,
                     progress_args=(reply, start_time)
                 )
-            except Exception:
+            except Exception as e:
+                print(f"send_video failed ({e}), falling back to document upload")
                 sent_message = await bot.send_document(
                     chat_id=channel_id,
                     document=filename,
@@ -501,10 +658,13 @@ async def send_vid(bot: Client, m: Message, cc, filename, thumb, name, prog, cha
             )
 
             parts = split_large_video(filename)
+            first_part_message = None
 
             try:
-                first_part_message = None
                 for idx, part in enumerate(parts):
+                    if not os.path.exists(part) or os.path.getsize(part) == 0:
+                        continue
+
                     part_dur = int(duration(part))
                     part_num = idx + 1
                     total_parts = len(parts)
@@ -520,8 +680,6 @@ async def send_vid(bot: Client, m: Message, cc, filename, thumb, name, prog, cha
                             caption=part_caption,
                             file_name=part_filename,
                             supports_streaming=True,
-                            height=720,
-                            width=1280,
                             thumb=thumbnail,
                             duration=part_dur,
                             progress=progress_bar,
@@ -529,7 +687,8 @@ async def send_vid(bot: Client, m: Message, cc, filename, thumb, name, prog, cha
                         )
                         if first_part_message is None:
                             first_part_message = msg_obj
-                    except Exception:
+                    except Exception as e:
+                        print(f"send_video part failed ({e}), falling back to document upload")
                         msg_obj = await bot.send_document(
                             chat_id=channel_id,
                             document=part,
@@ -570,4 +729,10 @@ async def send_vid(bot: Client, m: Message, cc, filename, thumb, name, prog, cha
         return sent_message
 
     except Exception as err:
+        # Cleanup on failure so a bad upload doesn't leave junk behind
+        if "temp_thumb" in locals() and temp_thumb and os.path.exists(temp_thumb):
+            try:
+                os.remove(temp_thumb)
+            except Exception:
+                pass
         raise Exception(f"send_vid failed: {err}")

@@ -13,7 +13,6 @@ aiofiles
 urllib3==2.0.3
 soupsieve==2.4.1
 beautifulsoup4
-certifi==2025.7.14
 charset-normalizer==3.3.2
 idna==3.6
 
@@ -34,12 +33,7 @@ pytube==15.0.0
 wget==3.2
 
 # Database & Caching
-motor
-pymongo
-umongo
-sqlalchemy
 async-lru==2.0.2
-certifi
 
 # Flask App (optional if using webhook/server)
 Flask
@@ -49,5 +43,4 @@ itsdangerous
 
 # Others
 pytz
-colorama
 reportlab

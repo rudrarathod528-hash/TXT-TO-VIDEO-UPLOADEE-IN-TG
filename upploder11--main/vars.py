@@ -1,25 +1,39 @@
 import os
 from os import environ
 
-# API Configuration
-API_ID = int(os.environ.get("API_ID", "33516244"))
-API_HASH = os.environ.get("API_HASH", "c1abd0630fcd54d33bc6528ec0955fff")
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "8948315622:AAHCvt_LXgLRocbmG1TEFgcn9wQkiFDANvI")
+# ==============================================
+# CONFIGURATION — apni values environment se daalo
+# (Render/Heroku/Koyeb: Environment Variables section)
+# ==============================================
 
-CREDIT = os.environ.get("CREDIT", "𝐈𝐓'𝐬𝐆𝐎𝐋𝐔")
-# MongoDB Configuration
-DATABASE_NAME = os.environ.get("DATABASE_NAME", "CpprivateApi")
-DATABASE_URL = os.environ.get("DATABASE_URL", "mongodb+srv://itsgoluAPI:jrMHSipToKUEnmcp@cpprivateapi.ghhp3oz.mongodb.net/?appName=CpprivateApi")  # Add your own atlas db
-MONGO_URL = DATABASE_URL  # For auth system
+# Telegram API Configuration (ZAROORI - apna daalo)
+API_ID = int(os.environ.get("API_ID", "0") or 0)
+API_HASH = os.environ.get("API_HASH", "")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 
-# Owner and Admin Configuration
-OWNER_ID = int(os.environ.get("OWNER_ID", "5575032909"))
-ADMINS = [int(x) for x in os.environ.get("ADMINS", "5575032909").split()]  # Default to owner ID
+# Caption credit (optional — khali chhod sakte ho)
+CREDIT = os.environ.get("CREDIT", "")
+
+# PW Token for PhysicsWallah (PW) player URLs (optional)
+PW_TOKEN = os.environ.get("PW_TOKEN", "")
+
+# Optional API tokens (ye bhi purane wale nahi hain — apne aap daalo agar chahiye)
+API_TOKEN = os.environ.get("API_TOKEN", "")   # utkarsh ws API token
+CW_TOKEN = os.environ.get("CW_TOKEN", "")     # brightcove bcov_auth token
+
+# No database required — sab kuch in-memory chalta hai
+DATABASE_NAME = os.environ.get("DATABASE_NAME", "TXT_VIDEO_BOT")
+DATABASE_URL = os.environ.get("DATABASE_URL", "")
+
+# Owner and Admin Configuration (ZAROORI - apna Telegram ID daalo)
+OWNER_ID = int(os.environ.get("OWNER_ID", "0") or 0)
+ADMINS = [int(x) for x in os.environ.get("ADMINS", "").split() if x.strip().isdigit()]
 
 # Channel Configuration
 PREMIUM_CHANNEL = ""
+
 # Thumbnail Configuration
-THUMBNAILS = list(map(str, os.environ.get("THUMBNAILS", "").split())) # Image Link For Default Thumbnail 
+THUMBNAILS = list(map(str, os.environ.get("THUMBNAILS", "").split()))
 
 # Web Server Configuration
 WEB_SERVER = os.environ.get("WEB_SERVER", "False").lower() == "true"
@@ -59,17 +73,3 @@ Please contact the admin to get access.</blockquote>""",
 
 <blockquote>Use format: {format}</blockquote>"""
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-

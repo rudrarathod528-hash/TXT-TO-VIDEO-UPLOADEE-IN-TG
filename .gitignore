@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+.env
+logs.txt
+downloads/
+*.mp4
+*.mkv
+*.webm
+*.part
+
+# env files
+.env
+.env.*
+!.env.example
