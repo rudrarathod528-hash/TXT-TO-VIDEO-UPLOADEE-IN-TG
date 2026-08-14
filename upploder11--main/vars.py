@@ -7,9 +7,9 @@ from os import environ
 # ==============================================
 
 # Telegram API Configuration (ZAROORI - apna daalo)
-API_ID = int(os.environ.get("API_ID", "33088642") or 0)
-API_HASH = os.environ.get("API_HASH", "bf6a7d6071350cb64849d46b8b4849e9")
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "8843772830:AAFMHa1dwGtd2stn2Bdt1B-yvJX2Bbkcr2I")
+API_ID = int(os.environ.get("API_ID", "") or 0)
+API_HASH = os.environ.get("API_HASH", "")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 
 # Caption credit (optional — khali chhod sakte ho)
 CREDIT = os.environ.get("CREDIT", "")
