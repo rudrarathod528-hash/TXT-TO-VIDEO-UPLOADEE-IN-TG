@@ -7,9 +7,9 @@ from os import environ
 # ==============================================
 
 # Telegram API Configuration (ZAROORI - apna daalo)
-API_ID = int(os.environ.get("API_ID", "0") or 0)
-API_HASH = os.environ.get("API_HASH", "")
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
+API_ID = int(os.environ.get("API_ID", "33088642") or 0)
+API_HASH = os.environ.get("API_HASH", "bf6a7d6071350cb64849d46b8b4849e9")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8843772830:AAFMHa1dwGtd2stn2Bdt1B-yvJX2Bbkcr2I")
 
 # Caption credit (optional — khali chhod sakte ho)
 CREDIT = os.environ.get("CREDIT", "")
@@ -26,8 +26,8 @@ DATABASE_NAME = os.environ.get("DATABASE_NAME", "TXT_VIDEO_BOT")
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 
 # Owner and Admin Configuration (ZAROORI - apna Telegram ID daalo)
-OWNER_ID = int(os.environ.get("OWNER_ID", "0") or 0)
-ADMINS = [int(x) for x in os.environ.get("ADMINS", "").split() if x.strip().isdigit()]
+OWNER_ID = int(os.environ.get("OWNER_ID", "5808599565") or 0)
+ADMINS = [int(x) for x in os.environ.get("ADMINS", "5808599565").split() if x.strip().isdigit()]
 
 # Channel Configuration
 PREMIUM_CHANNEL = ""
